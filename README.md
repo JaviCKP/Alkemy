@@ -8,7 +8,7 @@ No hay paquete publicado todavía; este repositorio sigue el [plan de ejecución
 
 ## Documentación
 
-- [Especificación técnica](especificacion-synthdb.md) — arquitectura, IR, algoritmo de planificación, contrato con el LLM, riesgos y alcance.
+- [Especificación técnica](especificacion.md) — arquitectura, IR, algoritmo de planificación, contrato con el LLM, riesgos y alcance.
 - [Plan de ejecución del MVP](plan-ejecucion-mvp.md) — hitos, tareas, calendario y checklist de release.
 - [ADRs](docs/adr/) — decisiones de diseño no triviales, una por archivo.
 
