@@ -79,7 +79,13 @@ jobs:
         run: uv sync --extra dev --extra db
 
       - name: pytest (integration)
-        run: uv run pytest -m integration
+        run: |
+          uv run pytest -m integration && exit 0
+          ec=$?
+          # exit 5 = pytest no coleccionó ningún test; aceptable mientras no
+          # existan tests de integración (se irán añadiendo desde H1/H4).
+          [ "$ec" -eq 5 ] && echo "Sin tests de integración todavía" && exit 0
+          exit "$ec"
 
   llm:
     name: pytest (llm, disparo manual)
@@ -108,6 +114,10 @@ jobs:
           ollama pull qwen2.5:7b-instruct
 
       - name: pytest (llm)
-        run: uv run pytest -m llm
+        run: |
+          uv run pytest -m llm && exit 0
+          ec=$?
+          [ "$ec" -eq 5 ] && echo "Sin tests llm todavía" && exit 0
+          exit "$ec"
         env:
           SYNTHDB_OLLAMA_BASE_URL: http://localhost:11434
