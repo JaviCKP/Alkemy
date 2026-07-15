@@ -22,13 +22,14 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar uv
         uses: astral-sh/setup-uv@v3
         with:
-          python-version: ${{ matrix.python-version }}
           enable-cache: true
 
       - name: Instalar dependencias
@@ -65,13 +66,13 @@ jobs:
           --health-retries 5
     env:
       SYNTHDB_TEST_POSTGRES_URL: postgresql://synthdb:synthdb@localhost:5432/synthdb_test
+      UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar uv
         uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.12"
           enable-cache: true
 
       - name: Instalar dependencias
@@ -84,13 +85,14 @@ jobs:
     name: pytest (llm, disparo manual)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+    env:
+      UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar uv
         uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.12"
           enable-cache: true
 
       - name: Instalar dependencias
