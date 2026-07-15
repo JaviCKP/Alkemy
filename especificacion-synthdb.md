@@ -370,11 +370,13 @@ Cuando dos fuentes se contradicen gana la de mayor prioridad, sin excepciones y 
 
 1. **Configuración del usuario (YAML).** Manda siempre. Si contradice una restricción de la BD (p. ej. fija un valor fuera de un CHECK), se rechaza en la compilación del plan con error explícito: ni siquiera el usuario puede pedir datos que la BD rechazará.
 2. **Restricciones de la IR (la BD como fuente de verdad).** Enums, cotas de CHECK, `NOT NULL`, unicidad, tipos. Recortan cualquier propuesta: si el LLM sugiere `uniform(0, 10^9)` para una columna con `CHECK (x BETWEEN 1900 AND 2026)`, las cotas se intersecan y prevalece el CHECK.
-3. **Plan del LLM**, si su confianza supera el umbral (por defecto 0,7; configurable).
+3. **Plan del LLM**, si su confianza supera el umbral (por defecto 0,7; configurable).[^adr-002]
 4. **Heurísticas deterministas.** Diccionario de patrones nombre→rol (multiidioma es/en: `email`, `correo`, `phone|tel(efono)?`, `fecha_|_date|_at$`, `precio|price|importe|amount`, `nombre|name`, `apellidos?|surname|last_name`, `dni|nif|ssn|vat`, `iban`, `direccion|address`, `codigo_postal|zip`, `lat|lon(gitud)?`, `url`, `%_id$`…) combinados con tipo y restricciones (un `varchar(2)` llamado `pais` → ISO-3166 alfa-2). Son rápidas, testeables y funcionan sin LLM.
 5. **Fallback seguro por tipo.** Siempre existe: enteros en rango pequeño, texto tipo `"{tabla}_{columna}_{n}"`, fechas en la última década, booleanos 50/50. Garantiza validez estructural aunque la semántica sea pobre, y se marca con aviso en el informe.
 
 Respuesta directa a "¿cómo se asigna un generador a cada columna?": cada fuente propone `(GeneratorSpec, confianza)`; el fusor recorre la lista de prioridad, aplica el recorte de la IR, y el primero que supera el umbral gana. Todo queda auditado en el plan.
+
+[^adr-002]: El experimento del Hito 0 encontró que la confianza autodeclarada por el modelo no está calibrada ante falta de evidencia (0% de calibración correcta sobre columnas opacas). Ver ADR-002 para el detalle y la enmienda al umbral.
 
 ### 7.2 Dependencias entre columnas de una misma fila
 
