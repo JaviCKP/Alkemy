@@ -1,0 +1,304 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    {
+      "name": "clientes",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "fecha_alta",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "viviendas",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "direccion",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "tipo",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "tipo IN ('piso', 'chalet', 'adosado')"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "superficie_m2",
+          "type": "DECIMAL(7, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "superficie_m2 > 0"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "anio_construccion",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "anio_construccion BETWEEN 1900 AND 2026"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "propietario_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "clientes",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "compraventas",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "vivienda_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "viviendas",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "comprador_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "clientes",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "fecha",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "precio",
+          "type": "DECIMAL(12, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "precio > 0"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "pagos",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "compraventa_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "compraventas",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "num_plazo",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "fecha",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "importe",
+          "type": "DECIMAL(12, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "importe > 0"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [
+        [
+          "compraventa_id",
+          "num_plazo"
+        ]
+      ],
+      "checks": []
+    }
+  ]
+}

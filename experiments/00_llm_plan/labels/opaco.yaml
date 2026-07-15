@@ -1,0 +1,52 @@
+tables:
+  t1:
+    columns:
+      c1:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+        notes: "PK; obvio por estructura (SERIAL PRIMARY KEY), no hace falta pista de nombre"
+      c2:
+        role: desconocido
+        acceptable_generators: [faker, text_pool, template, choice]
+        low_confidence_expected: true
+        notes: "VARCHAR(50) NOT NULL sin más contexto; no hay 'respuesta correcta' que adivinar, cualquier generador de texto es aceptable siempre que la confianza sea baja y quede un warning"
+      c3:
+        role: desconocido
+        acceptable_generators: [numeric_range]
+        low_confidence_expected: true
+        notes: "INT nullable; el tipo numérico es obvio, el significado no"
+      c7:
+        role: desconocido
+        acceptable_generators: [numeric_range]
+        low_confidence_expected: true
+        notes: "NUMERIC(10,2) nullable; el nombre 'c7' no da ninguna pista pese a la forma de precio/importe. NO es correcto que el modelo asuma 'precio' con confianza alta"
+      cod_x:
+        role: desconocido
+        acceptable_generators: [choice, template, faker]
+        low_confidence_expected: true
+        notes: "CHAR(2) nullable; 'cod_x' sugiere 'algún código' de forma genérica (igual que el ejemplo de glossary.yaml de la especificación, §15) pero sin glosario no se puede saber cuál. Aceptable que el modelo diga 'posible código' con confianza baja; NO aceptable que invente un dominio concreto (p. ej. 'código postal') con confianza alta"
+  t2:
+    columns:
+      c1:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+        notes: "PK; obvio por estructura"
+      ref_t1:
+        role: fk_t1
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "FK explícita (REFERENCES t1); estructuralmente obvia pese al nombre genérico 'ref_t1'"
+      c4:
+        role: desconocido
+        acceptable_generators: [datetime_range]
+        low_confidence_expected: true
+        notes: "DATE nullable; el tipo es obvio (usar datetime_range), el significado de qué fecha representa no"
+      c5:
+        role: desconocido
+        acceptable_generators: [choice]
+        low_confidence_expected: true
+        notes: "BOOLEAN NOT NULL DEFAULT false; el tipo es obvio (choice entre true/false), el significado del flag no. El catálogo v0 no tiene un generador booleano dedicado — limitación real a anotar en RESULTS.md"
+      val:
+        role: desconocido
+        acceptable_generators: [numeric_range]
+        low_confidence_expected: true
+        notes: "NUMERIC(12,4) nullable; 'val' sugiere vagamente 'valor' pero no hay pista de qué valor. Aceptable confianza baja con warning; NO aceptable inventar un significado específico"

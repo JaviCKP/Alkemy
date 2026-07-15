@@ -1,0 +1,50 @@
+tables:
+  personas:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      nombre:
+        role: nombre_persona
+        acceptable_generators: [faker]
+      fecha_nacimiento:
+        role: fecha_nacimiento
+        acceptable_generators: [datetime_range]
+      fecha_fallecimiento:
+        role: fecha_fallecimiento
+        acceptable_generators: [datetime_range, derived]
+        notes: "CHECK fecha_fallecimiento > fecha_nacimiento; el comment de la columna ya lo dice explícitamente"
+  sepulturas:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      codigo:
+        role: codigo_sepultura
+        acceptable_generators: [template, faker]
+      tipo:
+        role: tipo_sepultura
+        acceptable_generators: [choice]
+      capacidad:
+        role: capacidad_sepultura
+        acceptable_generators: [numeric_range, choice]
+        notes: "el comment de la columna ya explica el significado"
+  entierros:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      persona_id:
+        role: fk_persona
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "UNIQUE + FK: relación 1:1 con personas, una persona se entierra una vez"
+      sepultura_id:
+        role: fk_sepultura
+        acceptable_generators: [derived, sequence, uuid]
+      fecha_entierro:
+        role: fecha_entierro
+        acceptable_generators: [datetime_range, derived]
+        notes: "en el sistema real depende de personas.fecha_fallecimiento (regla entre tablas, no expresable en CHECK); v0 no lo exige"
+      responsable:
+        role: nombre_responsable
+        acceptable_generators: [faker]

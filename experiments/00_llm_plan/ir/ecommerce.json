@@ -1,0 +1,328 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    {
+      "name": "clientes",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "fecha_alta",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "categorias",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "productos",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "categoria_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "categorias",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "precio",
+          "type": "DECIMAL(10, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "precio > 0"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "stock",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "0",
+          "checks": [
+            "stock >= 0"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "pedidos",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "cliente_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "clientes",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "fecha",
+          "type": "TIMESTAMP",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "estado",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "estado IN ('pendiente', 'pagado', 'enviado', 'entregado', 'cancelado')"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "total",
+          "type": "DECIMAL(12, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "total >= 0"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "lineas_pedido",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "pedido_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "pedidos",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "producto_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "productos",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "cantidad",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "cantidad > 0"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "precio_unitario",
+          "type": "DECIMAL(10, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "precio_unitario > 0"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [
+        [
+          "pedido_id",
+          "producto_id"
+        ]
+      ],
+      "checks": []
+    }
+  ]
+}

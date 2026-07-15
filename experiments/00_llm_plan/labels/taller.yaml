@@ -1,0 +1,77 @@
+tables:
+  clientes:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      nombre:
+        role: nombre_persona
+        acceptable_generators: [faker]
+      telefono:
+        role: telefono
+        acceptable_generators: [faker]
+  vehiculos:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      cliente_id:
+        role: fk_cliente
+        acceptable_generators: [derived, sequence, uuid]
+      matricula:
+        role: matricula_vehiculo
+        acceptable_generators: [template, faker]
+      marca:
+        role: marca_vehiculo
+        acceptable_generators: [choice, faker]
+      modelo:
+        role: modelo_vehiculo
+        acceptable_generators: [choice, faker, text_pool]
+      anio:
+        role: anio_fabricacion
+        acceptable_generators: [numeric_range]
+  piezas:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      nombre:
+        role: nombre_pieza
+        acceptable_generators: [choice, text_pool, faker]
+      precio_unitario:
+        role: precio_pieza
+        acceptable_generators: [numeric_range]
+  reparaciones:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      vehiculo_id:
+        role: fk_vehiculo
+        acceptable_generators: [derived, sequence, uuid]
+      fecha_entrada:
+        role: fecha_entrada_taller
+        acceptable_generators: [datetime_range]
+      fecha_salida:
+        role: fecha_salida_taller
+        acceptable_generators: [datetime_range, derived]
+        notes: "nullable; CHECK fecha_salida IS NULL OR fecha_salida >= fecha_entrada"
+      descripcion:
+        role: descripcion_reparacion
+        acceptable_generators: [text_pool, template]
+  reparacion_piezas:
+    columns:
+      reparacion_id:
+        role: fk_reparacion
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "parte de la PK compuesta; tabla puente con atributos (riesgo principal del fixture)"
+      pieza_id:
+        role: fk_pieza
+        acceptable_generators: [derived, sequence, uuid]
+      cantidad:
+        role: cantidad_piezas_usadas
+        acceptable_generators: [numeric_range]
+      precio_aplicado:
+        role: precio_linea
+        acceptable_generators: [derived, numeric_range]
+        notes: "debería copiar/derivar de piezas.precio_unitario en el momento de la reparación"

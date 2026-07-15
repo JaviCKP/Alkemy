@@ -1,0 +1,322 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    {
+      "name": "clientes",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "telefono",
+          "type": "VARCHAR(20)",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "vehiculos",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "cliente_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "clientes",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "matricula",
+          "type": "VARCHAR(10)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "marca",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "modelo",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "anio",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "anio BETWEEN 1980 AND 2026"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "piezas",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "precio_unitario",
+          "type": "DECIMAL(10, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "precio_unitario > 0"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "reparaciones",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "vehiculo_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "vehiculos",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "fecha_entrada",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "fecha_salida",
+          "type": "DATE",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "descripcion",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": [
+        "fecha_salida IS NULL OR fecha_salida >= fecha_entrada"
+      ]
+    },
+    {
+      "name": "reparacion_piezas",
+      "comment": null,
+      "columns": [
+        {
+          "name": "reparacion_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "reparaciones",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "pieza_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "piezas",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "cantidad",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "cantidad > 0"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "precio_aplicado",
+          "type": "DECIMAL(10, 2)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "precio_aplicado > 0"
+          ],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "reparacion_id",
+        "pieza_id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    }
+  ]
+}

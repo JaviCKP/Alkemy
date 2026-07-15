@@ -1,0 +1,11 @@
+{
+  "fixture": "ciclos_nullable",
+  "model": "qwen2.5:7b-instruct",
+  "repetition": 3,
+  "timestamp": "2026-07-15T12:13:16.689701+00:00",
+  "latency_s": 9.574,
+  "json_valid": true,
+  "schema_valid": true,
+  "error": null,
+  "raw_content": "{\n  \"tables\": [\n    {\n      \"table_name\": \"pedidos\",\n      \"entity\": \"orden de compra o pedido\",\n      \"confidence\": 0.95,\n      \"columns\": [\n        {\n          \"column_name\": \"id\",\n          \"semantic_role\": \"identificador\",\n          \"generator\": {\"type\": \"sequence\", \"params\": {}},\n          \"confidence\": 0.99,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"fecha\",\n          \"semantic_role\": \"fecha_pedido\",\n          \"generator\": {\"type\": \"datetime_range\", \"params\": {\"start\": \"2015-01-01\"}},\n          \"confidence\": 0.85,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"factura_id\",\n          \"semantic_role\": \"identificador_de_factura_relacionada\",\n          \"generator\": {\"type\": \"choice\", \"params\": {\"values\": [null], \"weights\": [1]}},\n          \"confidence\": 0.95,\n          \"warnings\": [\"Nombre de columna opaco, podría ser un identificador o una referencia\"]\n        }\n      ]\n    },\n    {\n      \"table_name\": \"facturas\",\n      \"entity\": \"recibo de pago\",\n      \"confidence\": 0.95,\n      \"columns\": [\n        {\n          \"column_name\": \"id\",\n          \"semantic_role\": \"identificador\",\n          \"generator\": {\"type\": \"sequence\", \"params\": {}},\n          \"confidence\": 0.99,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"numero\",\n          \"semantic_role\": \"número_de_factura\",\n          \"generator\": {\"type\": \"template\", \"params\": {\"prefix\": \"FAC_\", \"length\": 20}},\n          \"confidence\": 0.95,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"pedido_id\",\n          \"semantic_role\": \"identificador_de_pedido_relacionado\",\n          \"generator\": {\"type\": \"choice\", \"params\": {\"values\": [null], \"weights\": [1]}},\n          \"confidence\": 0.95,\n          \"warnings\": [\"Nombre de columna opaco, podría ser un identificador o una referencia\"]\n        }\n      ]\n    }\n  ]\n}"
+}

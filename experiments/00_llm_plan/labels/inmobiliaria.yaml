@@ -1,0 +1,72 @@
+tables:
+  clientes:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      nombre:
+        role: nombre_persona
+        acceptable_generators: [faker]
+      email:
+        role: email
+        acceptable_generators: [faker]
+      fecha_alta:
+        role: fecha_alta_cliente
+        acceptable_generators: [datetime_range]
+  viviendas:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      direccion:
+        role: direccion_postal
+        acceptable_generators: [faker]
+      tipo:
+        role: categoria_inmueble
+        acceptable_generators: [choice]
+      superficie_m2:
+        role: superficie
+        acceptable_generators: [numeric_range]
+      anio_construccion:
+        role: anio_construccion
+        acceptable_generators: [numeric_range]
+      propietario_id:
+        role: fk_cliente_propietario
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "FK; el motor real la resuelve estructuralmente (KeyStore), no via generador semántico"
+  compraventas:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      vivienda_id:
+        role: fk_vivienda
+        acceptable_generators: [derived, sequence, uuid]
+      comprador_id:
+        role: fk_cliente_comprador
+        acceptable_generators: [derived, sequence, uuid]
+      fecha:
+        role: fecha_operacion
+        acceptable_generators: [datetime_range]
+        notes: "depende de viviendas.anio_construccion (regla temporal); aceptable aunque el v0 no declare depends_on"
+      precio:
+        role: precio_operacion
+        acceptable_generators: [numeric_range, derived]
+  pagos:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      compraventa_id:
+        role: fk_compraventa
+        acceptable_generators: [derived, sequence, uuid]
+      num_plazo:
+        role: numero_plazo
+        acceptable_generators: [sequence, numeric_range]
+      fecha:
+        role: fecha_pago
+        acceptable_generators: [datetime_range]
+      importe:
+        role: importe_pago
+        acceptable_generators: [numeric_range, derived]
+        notes: "en el sistema real, suma de plazos ~= precio del contrato (sum_over_group); v0 no lo exige"

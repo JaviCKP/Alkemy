@@ -1,0 +1,11 @@
+{
+  "fixture": "ciclos_nullable",
+  "model": "qwen2.5:3b-instruct",
+  "repetition": 3,
+  "timestamp": "2026-07-15T16:09:39.709586+00:00",
+  "latency_s": 7.329,
+  "json_valid": true,
+  "schema_valid": true,
+  "error": null,
+  "raw_content": "{\n  \"tables\": [\n    {\n      \"table_name\": \"pedidos\",\n      \"entity\": \"pedido o factura de venta\",\n      \"confidence\": 0.95,\n      \"columns\": [\n        {\n          \"column_name\": \"id\",\n          \"semantic_role\": \"identificador único del pedido\",\n          \"generator\": {\"type\": \"sequence\", \"params\": {}},\n          \"confidence\": 0.99,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"fecha\",\n          \"semantic_role\": \"fecha de creación o entrega del pedido\",\n          \"generator\": {\"type\": \"datetime_range\", \"params\": {\"start\": \"2015-01-01\"}},\n          \"confidence\": 0.85,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"factura_id\",\n          \"semantic_role\": \"referencia a la factura asociada (si aplica)\",\n          \"generator\": {\"type\": \"choice\", \"params\": {\"values\": [\"null\", \"1\"]}},\n          \"confidence\": 0.95,\n          \"warnings\": []\n        }\n      ]\n    },\n    {\n      \"table_name\": \"facturas\",\n      \"entity\": \"factura de venta o pago\",\n      \"confidence\": 0.95,\n      \"columns\": [\n        {\n          \"column_name\": \"id\",\n          \"semantic_role\": \"identificador único de la factura\",\n          \"generator\": {\"type\": \"sequence\", \"params\": {}},\n          \"confidence\": 0.99,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"numero\",\n          \"semantic_role\": \"número de la factura (por ejemplo, 'INV-123456')\",\n          \"generator\": {\"type\": \"text_pool\", \"params\": {\"pool\": [\"INV-\", \"FAC-\", \"REF-\"]}},\n          \"confidence\": 0.95,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"pedido_id\",\n          \"semantic_role\": \"referencia al pedido que se ha realizado para esta factura\",\n          \"generator\": {\"type\": \"choice\", \"params\": {\"values\": [\"null\", \"1\"]}},\n          \"confidence\": 0.95,\n          \"warnings\": []\n        }\n      ]\n    }\n  ]\n}"
+}

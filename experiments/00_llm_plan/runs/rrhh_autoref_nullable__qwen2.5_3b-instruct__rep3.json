@@ -1,0 +1,11 @@
+{
+  "fixture": "rrhh_autoref_nullable",
+  "model": "qwen2.5:3b-instruct",
+  "repetition": 3,
+  "timestamp": "2026-07-15T16:13:01.274301+00:00",
+  "latency_s": 6.285,
+  "json_valid": true,
+  "schema_valid": true,
+  "error": null,
+  "raw_content": "{\n  \"tables\": [\n    {\n      \"table_name\": \"empleados\",\n      \"entity\": \"empleado o personal de la empresa\",\n      \"confidence\": 0.95,\n      \"columns\": [\n        {\n          \"column_name\": \"id\",\n          \"semantic_role\": \"identificador único del empleado\",\n          \"generator\": {\"type\": \"sequence\", \"params\": {}},\n          \"confidence\": 0.99,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"nombre\",\n          \"semantic_role\": \"nombre del empleado\",\n          \"generator\": {\"type\": \"faker\", \"params\": {\"provider\": \"name\"}},\n          \"confidence\": 0.99,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"puesto\",\n          \"semantic_role\": \"cargo o puesto del empleado\",\n          \"generator\": {\"type\": \"text_pool\", \"params\": {}},\n          \"confidence\": 0.85,\n          \"warnings\": [\"No hay contexto suficiente para determinar qué tipo de puesto es.\"]\n        },\n        {\n          \"column_name\": \"fecha_contratacion\",\n          \"semantic_role\": \"fecha en la que el empleado fue contratado\",\n          \"generator\": {\"type\": \"datetime_range\", \"params\": {\"start\": \"2015-01-01\"}},\n          \"confidence\": 0.85,\n          \"warnings\": []\n        },\n        {\n          \"column_name\": \"manager_id\",\n          \"semantic_role\": \"identificador del empleado que supervisa al actual empleado (si aplica)\",\n          \"generator\": {\"type\": \"derived\", \"params\": {}},\n          \"confidence\": 0.95,\n          \"warnings\": [\"No hay contexto suficiente para determinar si el campo 'manager_id' es obligatorio o opcional.\"]\n        }\n      ]\n    }\n  ]\n}"
+}

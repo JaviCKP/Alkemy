@@ -1,0 +1,142 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    {
+      "name": "t1",
+      "comment": null,
+      "columns": [
+        {
+          "name": "c1",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "c2",
+          "type": "VARCHAR(50)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "c3",
+          "type": "INT",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "c7",
+          "type": "DECIMAL(10, 2)",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "cod_x",
+          "type": "CHAR(2)",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "c1"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "t2",
+      "comment": null,
+      "columns": [
+        {
+          "name": "c1",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "ref_t1",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "t1",
+            "columns": [
+              "c1"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "c4",
+          "type": "DATE",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "c5",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": "FALSE",
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "val",
+          "type": "DECIMAL(12, 4)",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "c1"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+tables:
+  pedidos:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      fecha:
+        role: fecha_pedido
+        acceptable_generators: [datetime_range]
+      factura_id:
+        role: fk_factura
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "NOT NULL y NO diferible en ningún sentido: ciclo irrompible. Este fixture no mide rol/generador — mide si el sistema se detiene con UnbreakableCycle y el diagnóstico correcto (T1.7), algo fuera del alcance del contrato v0 de H0"
+  facturas:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      numero:
+        role: numero_factura
+        acceptable_generators: [template, sequence]
+      pedido_id:
+        role: fk_pedido
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "NOT NULL, no diferible"

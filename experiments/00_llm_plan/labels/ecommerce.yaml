@@ -1,0 +1,78 @@
+tables:
+  clientes:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      nombre:
+        role: nombre_persona
+        acceptable_generators: [faker]
+      email:
+        role: email
+        acceptable_generators: [faker]
+      fecha_alta:
+        role: fecha_alta_cliente
+        acceptable_generators: [datetime_range]
+  categorias:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      nombre:
+        role: nombre_categoria
+        acceptable_generators: [choice, text_pool, faker]
+  productos:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      categoria_id:
+        role: fk_categoria
+        acceptable_generators: [derived, sequence, uuid]
+      nombre:
+        role: nombre_producto
+        acceptable_generators: [text_pool, faker, template]
+      precio:
+        role: precio_producto
+        acceptable_generators: [numeric_range]
+      stock:
+        role: cantidad_stock
+        acceptable_generators: [numeric_range]
+  pedidos:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      cliente_id:
+        role: fk_cliente
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "candidato natural a distribución zipf (pocos clientes concentran muchos pedidos)"
+      fecha:
+        role: fecha_pedido
+        acceptable_generators: [datetime_range]
+      estado:
+        role: estado_pedido
+        acceptable_generators: [choice]
+      total:
+        role: importe_total_pedido
+        acceptable_generators: [numeric_range, derived]
+        notes: "en el sistema real es sum_over_group de lineas_pedido; v0 no lo exige"
+  lineas_pedido:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      pedido_id:
+        role: fk_pedido
+        acceptable_generators: [derived, sequence, uuid]
+      producto_id:
+        role: fk_producto
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "candidato natural a distribución zipf (productos populares)"
+      cantidad:
+        role: cantidad_producto
+        acceptable_generators: [numeric_range]
+      precio_unitario:
+        role: precio_linea
+        acceptable_generators: [derived, numeric_range]
+        notes: "debería copiar/derivar de productos.precio en el momento del pedido"

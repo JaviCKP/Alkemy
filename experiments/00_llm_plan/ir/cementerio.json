@@ -1,0 +1,197 @@
+{
+  "dialect": "postgres",
+  "tables": [
+    {
+      "name": "personas",
+      "comment": "Personas fallecidas registradas para inhumación",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "nombre",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "fecha_nacimiento",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "fecha_fallecimiento",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": "Fecha de defunción, siempre posterior al nacimiento"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": [
+        "fecha_fallecimiento > fecha_nacimiento"
+      ]
+    },
+    {
+      "name": "sepulturas",
+      "comment": null,
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "codigo",
+          "type": "VARCHAR(20)",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "tipo",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "tipo IN ('nicho', 'panteon', 'fosa', 'columbario')"
+          ],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "capacidad",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [
+            "capacidad > 0"
+          ],
+          "references": null,
+          "comment": "Número máximo de restos que admite la sepultura"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    },
+    {
+      "name": "entierros",
+      "comment": "Un entierro por persona; ocupa una plaza en una sepultura con capacidad limitada",
+      "columns": [
+        {
+          "name": "id",
+          "type": "SERIAL",
+          "nullable": false,
+          "primary_key": true,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "persona_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": true,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "personas",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "sepultura_id",
+          "type": "INT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": {
+            "table": "sepulturas",
+            "columns": [
+              "id"
+            ]
+          },
+          "comment": null
+        },
+        {
+          "name": "fecha_entierro",
+          "type": "DATE",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        },
+        {
+          "name": "responsable",
+          "type": "TEXT",
+          "nullable": false,
+          "primary_key": false,
+          "unique": false,
+          "default": null,
+          "checks": [],
+          "references": null,
+          "comment": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_constraints": [],
+      "checks": []
+    }
+  ]
+}

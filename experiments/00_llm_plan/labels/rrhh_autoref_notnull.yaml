@@ -1,0 +1,19 @@
+tables:
+  empleados:
+    columns:
+      id:
+        role: identificador
+        acceptable_generators: [sequence, uuid]
+      nombre:
+        role: nombre_persona
+        acceptable_generators: [faker]
+      puesto:
+        role: puesto_cargo
+        acceptable_generators: [choice, text_pool, faker]
+      fecha_contratacion:
+        role: fecha_contratacion
+        acceptable_generators: [datetime_range]
+      manager_id:
+        role: fk_manager_autoreferencia
+        acceptable_generators: [derived, sequence, uuid]
+        notes: "autorreferencia NOT NULL; estrategia esperada = raíces se referencian a sí mismas + aviso (§6.3). Este fixture mide sobre todo el diagnóstico/aviso, no el generador"

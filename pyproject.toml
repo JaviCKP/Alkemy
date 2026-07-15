@@ -80,6 +80,10 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["D"]
+# experiments/ es código de usar y tirar (§2 del plan de ejecución): se
+# conservan los resultados, no el código, así que no lleva la misma
+# disciplina de docstrings que src/.
+"experiments/**" = ["D"]
 
 [tool.ruff.format]
 quote-style = "double"

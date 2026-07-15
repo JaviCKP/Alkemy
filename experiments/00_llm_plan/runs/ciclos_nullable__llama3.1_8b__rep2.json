@@ -1,0 +1,11 @@
+{
+  "fixture": "ciclos_nullable",
+  "model": "llama3.1:8b",
+  "repetition": 2,
+  "timestamp": "2026-07-15T15:59:50.337364+00:00",
+  "latency_s": 10.321,
+  "json_valid": true,
+  "schema_valid": true,
+  "error": null,
+  "raw_content": "{\"tables\": [{\"table_name\": \"pedidos\", \"entity\": \"pedido de un cliente\", \"confidence\": 0.95, \"columns\": [{\"column_name\": \"id\", \"semantic_role\": \"identificador\", \"generator\": {\"type\": \"sequence\", \"params\": {}}, \"confidence\": 0.99, \"warnings\": []}, {\"column_name\": \"fecha\", \"semantic_role\": \"fecha_pedido\", \"generator\": {\"type\": \"datetime_range\", \"params\": {\"start\": \"2022-01-01\"}}, \"confidence\": 0.85, \"warnings\": []}, {\"column_name\": \"factura_id\", \"semantic_role\": \"relacion_con_factura\", \"generator\": {\"type\": \"choice\", \"params\": {\"values\": [\"1\", \"2\", \"3\"], \"weights\": [0.4, 0.3, 0.3]}}, \"confidence\": 0.7, \"warnings\": []}], \"warnings\": []}, {\"table_name\": \"facturas\", \"entity\": \"factura de un pedido\", \"confidence\": 0.95, \"columns\": [{\"column_name\": \"id\", \"semantic_role\": \"identificador\", \"generator\": {\"type\": \"sequence\", \"params\": {}}, \"confidence\": 0.99, \"warnings\": []}, {\"column_name\": \"numero\", \"semantic_role\": \"numero_factura\", \"generator\": {\"type\": \"choice\", \"params\": {\"values\": [\"F001\", \"F002\", \"F003\"]}}, \"confidence\": 0.9, \"warnings\": []}, {\"column_name\": \"pedido_id\", \"semantic_role\": \"relacion_con_pedido\", \"generator\": {\"type\": \"derived\", \"params\": {}}, \"confidence\": 0.8, \"warnings\": []}], \"warnings\": []}]}"
+}
