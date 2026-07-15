@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Especificación técnica
+    url: https://github.com/JaviCKP/Alkemy/blob/main/especificacion-synthdb.md
+    about: Alcance, arquitectura y qué queda deliberadamente fuera del MVP.
+  - name: Plan de ejecución del MVP
+    url: https://github.com/JaviCKP/Alkemy/blob/main/plan-ejecucion-mvp.md
+    about: Hitos, tareas y calendario.

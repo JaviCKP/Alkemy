@@ -1,0 +1,70 @@
+name: Informe de fallo
+description: Un comportamiento de SynthDB que no coincide con lo esperado.
+title: "[bug]: "
+labels: ["tipo:bug"]
+body:
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: Descripción
+      description: Qué esperabas que ocurriera y qué ocurrió en su lugar.
+    validations:
+      required: true
+
+  - type: textarea
+    id: esquema
+    attributes:
+      label: Esquema mínimo reproducible
+      description: >
+        El fragmento de schema.sql más pequeño que reproduce el problema
+        (idealmente 1-3 tablas). Sin esto casi nunca se puede investigar
+        el fallo: reduce tu esquema real hasta el mínimo que siga fallando.
+      render: sql
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: config.yaml (si lo usas)
+      render: yaml
+    validations:
+      required: false
+
+  - type: textarea
+    id: comando
+    attributes:
+      label: Comando ejecutado y salida completa
+      description: Incluye el traceback completo si lo hay.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Versión de synthdb (`synthdb --version`)
+    validations:
+      required: true
+
+  - type: input
+    id: entorno
+    attributes:
+      label: SO / Python / motor de BD
+      placeholder: "p. ej. Ubuntu 24.04, Python 3.12, PostgreSQL 16"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hito
+    attributes:
+      label: Hito relacionado (si lo sabes)
+      options:
+        - "H0 - Experimento LLM"
+        - "H1 - Núcleo estructural"
+        - "H2 - Generación determinista"
+        - "H3 - Capa semántica LLM"
+        - "H4 - Inserción y validación"
+        - "No lo sé"
+    validations:
+      required: false

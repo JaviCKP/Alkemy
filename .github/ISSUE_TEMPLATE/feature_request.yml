@@ -1,0 +1,39 @@
+name: Propuesta de mejora
+description: Un patrón de heurística, generador, dialecto o funcionalidad que falta.
+title: "[feature]: "
+labels: ["tipo:feature"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: Qué caso de uso no cubre SynthDB hoy
+    validations:
+      required: true
+
+  - type: textarea
+    id: esquema
+    attributes:
+      label: Esquema de ejemplo (si aplica)
+      description: Un fragmento de schema.sql que ilustre el caso.
+      render: sql
+    validations:
+      required: false
+
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Propuesta concreta
+      description: Cómo imaginas que debería comportarse.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: alcance
+    attributes:
+      label: Antes de enviar
+      options:
+        - label: >
+            He revisado docs/limitations.md y la especificación (§2, alcance
+            MVP/v1.0/post-1.0) para comprobar que esto no está ya delimitado
+            como fuera de alcance a propósito.
+          required: true
