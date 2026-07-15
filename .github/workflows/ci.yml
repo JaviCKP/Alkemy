@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_SYSTEM_PYTHON: "0"
+
+jobs:
+  test:
+    name: lint + mypy + pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Instalar dependencias
+        run: uv sync --extra dev --extra db
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy
+
+      - name: pytest (unit)
+        run: uv run pytest -m "not integration and not llm" --cov=synthdb --cov-report=xml
+
+  integration:
+    name: pytest (integration, PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: synthdb
+          POSTGRES_PASSWORD: synthdb
+          POSTGRES_DB: synthdb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SYNTHDB_TEST_POSTGRES_URL: postgresql://synthdb:synthdb@localhost:5432/synthdb_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Instalar dependencias
+        run: uv sync --extra dev --extra db
+
+      - name: pytest (integration)
+        run: uv run pytest -m integration
+
+  llm:
+    name: pytest (llm, disparo manual)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Instalar dependencias
+        run: uv sync --extra dev --extra db
+
+      - name: Instalar Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Servir Ollama y descargar modelo
+        run: |
+          ollama serve &
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 2; done
+          ollama pull qwen2.5:7b-instruct
+
+      - name: pytest (llm)
+        run: uv run pytest -m llm
+        env:
+          SYNTHDB_OLLAMA_BASE_URL: http://localhost:11434
