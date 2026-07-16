@@ -14,6 +14,7 @@ import pytest
 from sqlglot.errors import ParseError as SqlglotParseError
 from syrupy.assertion import SnapshotAssertion
 
+from synthdb.ir.hashing import schema_hash
 from synthdb.ir.schema import SchemaSpec, TableSpec
 from synthdb.parsing.ddl import ParseError, parse_ddl
 
@@ -56,6 +57,18 @@ def test_inline_primary_key_column_is_forced_not_nullable() -> None:
     table = _table(parse_ddl(sql), "t")
 
     assert table.columns[0].nullable is False
+
+
+def test_serial_column_without_primary_key_is_still_not_nullable() -> None:
+    # serial expande a "integer NOT NULL DEFAULT nextval(...)": el NOT NULL
+    # va incluido aunque la columna no sea (ni forme parte de) la PK.
+    sql = "CREATE TABLE t (contador SERIAL, id INT PRIMARY KEY);"
+
+    table = _table(parse_ddl(sql), "t")
+
+    contador = table.columns[0]
+    assert contador.type.autoincrement is True
+    assert contador.nullable is False
 
 
 def test_composite_primary_key_at_table_level() -> None:
@@ -170,6 +183,54 @@ def test_table_without_explicit_namespace_has_no_schema() -> None:
     table = _table(parse_ddl(sql), "users")
 
     assert table.schema_ is None
+
+
+def test_unquoted_identifiers_fold_to_lowercase_like_postgres() -> None:
+    # Para PostgreSQL, "CREATE TABLE Clientes" y "CREATE TABLE clientes" son
+    # la misma tabla: sin plegado, dos DDL equivalentes producirían IRs (y
+    # hashes) distintos.
+    mixed_case = parse_ddl("CREATE TABLE Clientes (ID SERIAL PRIMARY KEY, Nombre TEXT);")
+    lowercase = parse_ddl("CREATE TABLE clientes (id SERIAL PRIMARY KEY, nombre TEXT);")
+
+    assert mixed_case == lowercase
+    assert schema_hash(mixed_case) == schema_hash(lowercase)
+
+
+def test_quoted_identifiers_preserve_case() -> None:
+    sql = 'CREATE TABLE "MiTabla" ("MiColumna" TEXT, id INT PRIMARY KEY);'
+
+    table = _table(parse_ddl(sql), "MiTabla")
+
+    assert table.columns[0].name == "MiColumna"
+
+
+def test_unquoted_table_with_a_quoted_column_mixes_both_rules() -> None:
+    sql = 'CREATE TABLE Clientes ("Nombre" TEXT, ID INT PRIMARY KEY);'
+
+    table = _table(parse_ddl(sql), "clientes")
+
+    assert table.columns[0].name == "Nombre"
+    assert table.columns[1].name == "id"
+
+
+def test_explicit_namespace_folds_to_lowercase_when_unquoted() -> None:
+    table = _table(parse_ddl("CREATE TABLE Ventas.Users (id INT PRIMARY KEY);"), "users")
+
+    assert table.schema_ == "ventas"
+
+
+def test_table_level_primary_key_identifiers_fold_to_lowercase_too() -> None:
+    sql = """
+        CREATE TABLE PedidoItems (
+            PedidoId INT,
+            ProductoId INT,
+            PRIMARY KEY (PedidoId, ProductoId)
+        );
+    """
+
+    table = _table(parse_ddl(sql), "pedidoitems")
+
+    assert table.primary_key == ["pedidoid", "productoid"]
 
 
 def test_syntax_error_raises_parse_error_with_line_and_column() -> None:

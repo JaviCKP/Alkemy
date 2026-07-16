@@ -11,6 +11,16 @@ Toda construcción del DDL que el parser reconozca pero no maneje todavía
 sentencias que no sean `CREATE TABLE`...) no aborta el parseo de lo que sí
 se soporta: se registra como aviso en `SchemaSpec.warnings` con la tabla (y
 columna, si aplica) afectada, nunca en silencio (CLAUDE.md).
+
+La IR guarda la **identidad efectiva** de PostgreSQL para nombres de tabla,
+schema/namespace, columnas e identificadores de `PRIMARY KEY`, no la grafía
+literal del DDL: PostgreSQL pliega a minúsculas todo identificador sin
+comillas (`CREATE TABLE Clientes` y `CREATE TABLE clientes` son la misma
+tabla) y conserva tal cual uno entrecomillado (`"MiTabla"` sigue siendo
+`MiTabla`). Sin este plegado, dos DDL equivalentes para PostgreSQL
+producirían IRs y hashes distintos, y en la entrega 2 la resolución de FK
+por nombre fallaría ante una diferencia que la base de datos ni ve. Ver
+`_identifier_name`.
 """
 
 from __future__ import annotations
@@ -103,6 +113,18 @@ def parse_ddl(sql: str, dialect: str = "postgres") -> SchemaSpec:
     return SchemaSpec(dialect=dialect, tables=tables, warnings=warnings)
 
 
+def _identifier_name(identifier: exp.Identifier) -> str:
+    """Nombre efectivo de un identificador, con el plegado de PostgreSQL.
+
+    Sin comillas, PostgreSQL pliega el identificador a minúsculas antes de
+    usarlo como nombre real; entrecomillado, lo conserva tal cual. sqlglot
+    expone esa distinción en `Identifier.quoted`, así que basta con mirarla
+    aquí en vez de reinterpretar el texto.
+    """
+    name = str(identifier.this)
+    return name if identifier.quoted else name.lower()
+
+
 def _translate_parse_error(exc: _SqlglotParseError) -> ParseError:
     """Convierte un `sqlglot.errors.ParseError` en nuestro `ParseError`."""
     detail = exc.errors[0] if exc.errors else {}
@@ -122,9 +144,9 @@ def _parse_create_table(statement: exp.Create, dialect: str, warnings: list[str]
     """Construye un `TableSpec` a partir de un nodo `CREATE TABLE`."""
     schema_node = statement.this
     table_node = schema_node.this if isinstance(schema_node, exp.Schema) else schema_node
-    table_name: str = table_node.this.this
+    table_name = _identifier_name(table_node.this)
     namespace = table_node.args.get("db")
-    schema_name = namespace.this if isinstance(namespace, exp.Identifier) else None
+    schema_name = _identifier_name(namespace) if isinstance(namespace, exp.Identifier) else None
 
     entries = schema_node.expressions if isinstance(schema_node, exp.Schema) else []
 
@@ -142,7 +164,9 @@ def _parse_create_table(statement: exp.Create, dialect: str, warnings: list[str]
 
         for item in _unwrap_table_constraint(entry):
             if isinstance(item, exp.PrimaryKey):
-                table_primary_key = [identifier.this for identifier in item.expressions]
+                table_primary_key = [
+                    _identifier_name(identifier) for identifier in item.expressions
+                ]
             else:
                 label = _unsupported_construct_label(item)
                 warnings.append(
@@ -179,7 +203,7 @@ def _parse_column(
     column_def: exp.ColumnDef, table_name: str, dialect: str, warnings: list[str]
 ) -> tuple[ColumnSpec, bool]:
     """Construye un `ColumnSpec` y señala si lleva `PRIMARY KEY` inline."""
-    column_name: str = column_def.this.this
+    column_name = _identifier_name(column_def.this)
     raw_type, precision, scale, length = _type_components(column_def.args["kind"], dialect)
     mapping = map_postgres_type(raw_type, precision=precision, scale=scale, length=length)
     for warning in mapping.warnings:
@@ -200,11 +224,11 @@ def _parse_column(
                 "soportada todavía; se ignora (ver docs/limitations.md)"
             )
 
-    # PRIMARY KEY implica NOT NULL en PostgreSQL aunque el DDL no lo declare
-    # aparte (sqlglot no añade un NotNullColumnConstraint independiente).
-    column = ColumnSpec(
-        name=column_name, type=mapping.type_spec, nullable=not (not_null or is_primary_key)
-    )
+    # PRIMARY KEY y serial/bigserial/smallserial (autoincrement) implican NOT
+    # NULL en PostgreSQL aunque el DDL no lo declare aparte: sqlglot no añade
+    # un NotNullColumnConstraint independiente para ninguno de los dos casos.
+    forced_not_null = not_null or is_primary_key or mapping.type_spec.autoincrement
+    column = ColumnSpec(name=column_name, type=mapping.type_spec, nullable=not forced_not_null)
     return column, is_primary_key
 
 
