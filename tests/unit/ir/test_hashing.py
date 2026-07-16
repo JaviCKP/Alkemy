@@ -151,6 +151,29 @@ def test_reordering_tables_does_not_change_hash() -> None:
     assert schema_hash(schema) == schema_hash(reordered)
 
 
+def test_reordering_homonymous_tables_in_different_schemas_does_not_change_hash() -> None:
+    """`name` solo no basta: dos tablas `users` en namespaces distintos deben
+    desempatar por `schema`, no por orden de entrada.
+    """
+    ventas_users = TableSpec(
+        name="users",
+        schema="ventas",
+        columns=[ColumnSpec(name="id", type=TypeSpec(kind="integer"), nullable=False)],
+        primary_key=["id"],
+    )
+    rrhh_users = TableSpec(
+        name="users",
+        schema="rrhh",
+        columns=[ColumnSpec(name="id", type=TypeSpec(kind="integer"), nullable=False)],
+        primary_key=["id"],
+    )
+
+    first = SchemaSpec(dialect="postgres", tables=[ventas_users, rrhh_users])
+    second = SchemaSpec(dialect="postgres", tables=[rrhh_users, ventas_users])
+
+    assert schema_hash(first) == schema_hash(second)
+
+
 def test_reordering_columns_changes_hash() -> None:
     schema = _build_example_schema()
     clientes = schema.tables[0]

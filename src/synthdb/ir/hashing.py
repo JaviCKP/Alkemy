@@ -8,8 +8,11 @@ palabras clave o comentarios de sintaxis, que ni siquiera llegan a la IR.
 Decisiones de canonicalización (ya tomadas; no reabrir sin un ADR nuevo,
 CLAUDE.md):
 
-- Las **tablas** se ordenan por `name`: dos esquemas con las mismas tablas en
-  distinto orden producen el mismo hash.
+- Las **tablas** se ordenan por la clave compuesta `(schema, name)` (`schema`
+  ausente se normaliza a cadena vacía): dos esquemas con las mismas tablas en
+  distinto orden producen el mismo hash. Solo `name` no basta porque dos
+  tablas homónimas en namespaces distintos (`ventas.users`, `rrhh.users`,
+  ambas válidas en PostgreSQL) desempatarían por orden de entrada.
 - Las **columnas** dentro de cada tabla NO se reordenan: su orden es parte de
   la identidad del esquema (afecta a los `INSERT` posicionales), así que
   reordenarlas cambia el hash.
@@ -83,7 +86,9 @@ def schema_hash(spec: SchemaSpec) -> str:
         El hash como cadena hexadecimal de 64 caracteres en minúsculas.
     """
     data = spec.model_dump(mode="json", by_alias=True, exclude=_EXCLUDED_FIELDS)
-    data["tables"] = sorted(data["tables"], key=lambda table: table["name"])
+    data["tables"] = sorted(
+        data["tables"], key=lambda table: (table.get("schema") or "", table["name"])
+    )
 
     canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
