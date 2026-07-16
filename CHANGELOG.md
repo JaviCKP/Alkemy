@@ -47,6 +47,23 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   `RelationshipSpec.cardinality_hint`, `CheckSpec.ast_supported`,
   `CheckSpec.bounds_derived`) mediante un mapa de exclusión centralizado
   (formato `include`/`exclude` avanzado de Pydantic v2), no casos sueltos.
+- T1.3 (entrega 1 de 3) — `parsing/ddl.py`: `parse_ddl()` convierte
+  sentencias `CREATE TABLE` de PostgreSQL (AST de sqlglot, dialecto
+  explícito) en `TableSpec`: nombre de tabla y schema/namespace, columnas en
+  su orden original, tipos vía `map_postgres_type` (sus avisos se propagan a
+  `SchemaSpec.warnings`), `NOT NULL` y `PRIMARY KEY` tanto inline como a
+  nivel de tabla (simple y compuesta). Una columna en la PK queda siempre
+  `nullable=False`, aparezca o no un `NOT NULL` explícito en el DDL (PK lo
+  implica en PostgreSQL). FK, `UNIQUE`, `CHECK`, `DEFAULT`, enums y
+  comentarios quedan para las entregas 2 y 3: toda construcción que el
+  parser reconoce pero todavía no maneja (incluidas sentencias que no son
+  `CREATE TABLE`, p. ej. `ALTER TABLE`/`CREATE INDEX`) se registra como
+  aviso con tabla y columna, nunca en silencio. Un error de sintaxis se
+  traduce a un `ParseError` propio con línea, columna y sentencia
+  aproximada — nunca se propaga el `sqlglot.errors.ParseError` original.
+  Primer snapshot golden de la IR (syrupy,
+  `tests/unit/parsing/__snapshots__/test_ddl.ambr`) parseando
+  `tests/schemas/inmobiliaria.sql` completo.
 
 ### Fixed
 
