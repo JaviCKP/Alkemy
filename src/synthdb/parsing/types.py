@@ -15,7 +15,7 @@ Un tipo de PostgreSQL sin mapeo conocido nunca aborta el proceso: degrada a
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from synthdb.ir.schema import TypeKind, TypeSpec
 
@@ -27,9 +27,36 @@ _AUTOINCREMENT_ALIASES: frozenset[str] = frozenset(
 _TIMEZONE_AWARE_ALIASES: frozenset[str] = frozenset({"timestamptz", "timestamp with time zone"})
 """Alias de PostgreSQL que implican `TypeSpec.with_timezone=True`."""
 
+_INTEGER_BITS: dict[str, Literal[16, 32, 64]] = {
+    "smallint": 16,
+    "int2": 16,
+    "smallserial": 16,
+    "serial2": 16,
+    "integer": 32,
+    "int": 32,
+    "int4": 32,
+    "serial": 32,
+    "serial4": 32,
+    "bigint": 64,
+    "int8": 64,
+    "bigserial": 64,
+    "serial8": 64,
+}
+"""Ancho en bits de cada alias entero de PostgreSQL. Sin CHECK, este ancho es
+la cota implícita del generador de enteros (H2), de ahí que se registre en
+`TypeSpec.bits`."""
+
+_FLOAT_ALIASES: frozenset[str] = frozenset(
+    {"real", "float4", "double precision", "float8", "float"}
+)
+"""Alias de coma flotante binaria. Mapean a `numeric` sin precisión/escala: el
+argumento de `float(p)` selecciona el tamaño de almacenamiento (real vs.
+double), no una precisión decimal, así que no debe propagarse como `numeric(p)`."""
+
 _POSTGRES_TYPE_MAP: dict[str, TypeKind] = {
-    # Enteros (la distinción de bits no forma parte del catálogo canónico;
-    # las cotas reales las aporta el CHECK propagado, no el tipo).
+    # Enteros: todos comparten el kind canónico "integer"; el ancho en bits se
+    # registra aparte en `TypeSpec.bits` (ver `_INTEGER_BITS`) porque, sin
+    # CHECK, ese ancho es la cota implícita del generador.
     "serial": "integer",
     "serial4": "integer",
     "bigserial": "integer",
@@ -46,6 +73,13 @@ _POSTGRES_TYPE_MAP: dict[str, TypeKind] = {
     # Numéricos con precisión/escala.
     "numeric": "numeric",
     "decimal": "numeric",
+    # Coma flotante binaria (mapea a numeric sin precisión/escala, ver
+    # `_FLOAT_ALIASES`); si no, degradarían a text e invalidarían el INSERT.
+    "real": "numeric",
+    "float4": "numeric",
+    "double precision": "numeric",
+    "float8": "numeric",
+    "float": "numeric",
     # Texto.
     "text": "text",
     "varchar": "varchar",
@@ -132,9 +166,18 @@ def map_postgres_type(
 
     if kind == "integer":
         return TypeMappingResult(
-            TypeSpec(kind="integer", autoincrement=normalized in _AUTOINCREMENT_ALIASES), []
+            TypeSpec(
+                kind="integer",
+                autoincrement=normalized in _AUTOINCREMENT_ALIASES,
+                bits=_INTEGER_BITS.get(normalized),
+            ),
+            [],
         )
     if kind == "numeric":
+        if normalized in _FLOAT_ALIASES:
+            # float(p) selecciona real vs. double (tamaño de almacenamiento),
+            # no una precisión decimal: no se propaga como numeric(p, s).
+            return TypeMappingResult(TypeSpec(kind="numeric"), [])
         return TypeMappingResult(TypeSpec(kind="numeric", precision=precision, scale=scale), [])
     if kind == "varchar":
         return TypeMappingResult(TypeSpec(kind="varchar", length=length), [])

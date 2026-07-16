@@ -6,24 +6,32 @@ from synthdb.ir.schema import TypeSpec
 from synthdb.parsing.types import map_postgres_type
 
 KNOWN_TYPE_CASES = [
-    # Enteros: serial implica autoincrement; el resto de la familia, no.
-    ("SERIAL", {}, TypeSpec(kind="integer", autoincrement=True)),
-    ("serial4", {}, TypeSpec(kind="integer", autoincrement=True)),
-    ("bigserial", {}, TypeSpec(kind="integer", autoincrement=True)),
-    ("serial8", {}, TypeSpec(kind="integer", autoincrement=True)),
-    ("smallserial", {}, TypeSpec(kind="integer", autoincrement=True)),
-    ("serial2", {}, TypeSpec(kind="integer", autoincrement=True)),
-    ("INT", {}, TypeSpec(kind="integer")),
-    ("integer", {}, TypeSpec(kind="integer")),
-    ("int4", {}, TypeSpec(kind="integer")),
-    ("bigint", {}, TypeSpec(kind="integer")),
-    ("int8", {}, TypeSpec(kind="integer")),
-    ("smallint", {}, TypeSpec(kind="integer")),
-    ("int2", {}, TypeSpec(kind="integer")),
+    # Enteros: serial implica autoincrement; el resto de la familia, no. El
+    # ancho en bits acompaña a cada alias (smallint=16, integer=32, bigint=64).
+    ("SERIAL", {}, TypeSpec(kind="integer", autoincrement=True, bits=32)),
+    ("serial4", {}, TypeSpec(kind="integer", autoincrement=True, bits=32)),
+    ("bigserial", {}, TypeSpec(kind="integer", autoincrement=True, bits=64)),
+    ("serial8", {}, TypeSpec(kind="integer", autoincrement=True, bits=64)),
+    ("smallserial", {}, TypeSpec(kind="integer", autoincrement=True, bits=16)),
+    ("serial2", {}, TypeSpec(kind="integer", autoincrement=True, bits=16)),
+    ("INT", {}, TypeSpec(kind="integer", bits=32)),
+    ("integer", {}, TypeSpec(kind="integer", bits=32)),
+    ("int4", {}, TypeSpec(kind="integer", bits=32)),
+    ("bigint", {}, TypeSpec(kind="integer", bits=64)),
+    ("int8", {}, TypeSpec(kind="integer", bits=64)),
+    ("smallint", {}, TypeSpec(kind="integer", bits=16)),
+    ("int2", {}, TypeSpec(kind="integer", bits=16)),
     # Numéricos, con y sin precisión/escala explícitas.
     ("numeric", {"precision": 7, "scale": 2}, TypeSpec(kind="numeric", precision=7, scale=2)),
     ("NUMERIC", {}, TypeSpec(kind="numeric")),
     ("decimal", {"precision": 12, "scale": 4}, TypeSpec(kind="numeric", precision=12, scale=4)),
+    # Coma flotante binaria: mapea a numeric sin precisión/escala.
+    ("real", {}, TypeSpec(kind="numeric")),
+    ("float4", {}, TypeSpec(kind="numeric")),
+    ("double precision", {}, TypeSpec(kind="numeric")),
+    ("float8", {}, TypeSpec(kind="numeric")),
+    ("float", {}, TypeSpec(kind="numeric")),
+    ("DOUBLE PRECISION", {}, TypeSpec(kind="numeric")),
     # Texto, con y sin longitud.
     ("text", {}, TypeSpec(kind="text")),
     ("varchar", {"length": 50}, TypeSpec(kind="varchar", length=50)),
@@ -48,7 +56,23 @@ KNOWN_TYPE_CASES = [
     ("bytea", {}, TypeSpec(kind="bytea")),
     # Normalización: mayúsculas y espacios extra no cambian el resultado.
     ("  Character Varying ", {"length": 10}, TypeSpec(kind="varchar", length=10)),
-    ("  int   ", {}, TypeSpec(kind="integer")),
+    ("  int   ", {}, TypeSpec(kind="integer", bits=32)),
+]
+
+INTEGER_BITS_CASES = [
+    ("smallint", 16),
+    ("int2", 16),
+    ("smallserial", 16),
+    ("serial2", 16),
+    ("integer", 32),
+    ("int", 32),
+    ("int4", 32),
+    ("serial", 32),
+    ("serial4", 32),
+    ("bigint", 64),
+    ("int8", 64),
+    ("bigserial", 64),
+    ("serial8", 64),
 ]
 
 UNKNOWN_TYPE_CASES = [
@@ -116,3 +140,25 @@ def test_varchar_without_length_is_unbounded() -> None:
     result = map_postgres_type("varchar")
 
     assert result.type_spec.length is None
+
+
+@pytest.mark.parametrize("raw_type,expected_bits", INTEGER_BITS_CASES)
+def test_integer_aliases_carry_their_bit_width(raw_type, expected_bits) -> None:
+    # Sin CHECK, el ancho del tipo es la cota implícita del generador (H2):
+    # un smallint admite hasta 32767, no el rango de un integer.
+    result = map_postgres_type(raw_type)
+
+    assert result.type_spec.bits == expected_bits
+
+
+@pytest.mark.parametrize("raw_type", ["real", "float4", "double precision", "float8", "float"])
+def test_float_family_maps_to_numeric_dropping_any_precision(raw_type) -> None:
+    # El argumento de float(p) selecciona real vs. double, no una precisión
+    # decimal: no debe propagarse como numeric(p). Se descarta aunque llegue.
+    result = map_postgres_type(raw_type, precision=24, scale=6)
+
+    assert result.type_spec == TypeSpec(kind="numeric")
+    assert result.type_spec.precision is None
+    assert result.type_spec.scale is None
+    assert result.type_spec.bits is None
+    assert result.warnings == []

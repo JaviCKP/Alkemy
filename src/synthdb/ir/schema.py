@@ -55,6 +55,15 @@ class TypeSpec(IRModel):
     precision: int | None = Field(default=None, description="Precisión de `numeric(p, s)`.")
     scale: int | None = Field(default=None, description="Escala de `numeric(p, s)`.")
     length: int | None = Field(default=None, description="Longitud de `varchar(n)`/`char(n)`.")
+    bits: Literal[16, 32, 64] | None = Field(
+        default=None,
+        description=(
+            "Ancho en bits del entero (`smallint`=16, `integer`=32, `bigint`=64). "
+            "Cuando una columna entera no lleva CHECK, el tipo ES la cota: el "
+            "generador de enteros (H2) usa `bits` como cota implícita igual que "
+            "usa `CheckSpec.bounds_derived`. `None` fuera de `kind='integer'`."
+        ),
+    )
     with_timezone: bool | None = Field(
         default=None, description="Solo aplica a `kind='timestamp'`."
     )

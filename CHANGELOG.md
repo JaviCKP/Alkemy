@@ -37,3 +37,22 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   `is_enum`). Independiente de `sqlglot`: el parser DDL (T1.3) le pasa el
   nombre y los parámetros ya extraídos. Un tipo no reconocido nunca lanza
   excepción: degrada a `text` con un aviso registrado.
+
+### Fixed
+
+- Revisión de T1.1 (#8) / T1.2 (#9) tras el merge de #19 (#20). Dos hallazgos
+  que afectaban a la validez de los INSERT:
+  - Familia de coma flotante binaria (`real`, `float4`, `double precision`,
+    `float8`, `float`) sin mapeo en `parsing/types.py`: degradaba a `text` con
+    aviso, lo que produciría INSERT inválidos en columnas float. Ahora mapea al
+    kind canónico `numeric` sin `precision`/`scale` (el argumento de `float(p)`
+    selecciona el tamaño de almacenamiento, real vs. double, no una precisión
+    decimal, así que no se propaga).
+  - `TypeSpec` sin ancho de entero: nuevo campo `bits: Literal[16, 32, 64] |
+    None`, poblado en el mapeo (`smallint`/`int2`/`smallserial`/`serial2` → 16;
+    `integer`/`int`/`int4`/`serial`/`serial4` → 32;
+    `bigint`/`int8`/`bigserial`/`serial8` → 64). Cuando una columna entera no
+    lleva CHECK, el ancho del tipo es la cota implícita del generador de enteros
+    (H2), igual que `bounds_derived`; hasta ahora un `smallint` sin CHECK podía
+    desbordar. Resuelto antes de T1.5 (hash canónico) porque `bits` cambia la
+    salida de `canonical_json()`.
