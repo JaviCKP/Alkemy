@@ -64,6 +64,36 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   Primer snapshot golden de la IR (syrupy,
   `tests/unit/parsing/__snapshots__/test_ddl.ambr`) parseando
   `tests/schemas/inmobiliaria.sql` completo.
+- T1.3 (entrega 2 de 3) — `parsing/ddl.py`: añade `FOREIGN KEY` (inline vía
+  `REFERENCES` y de tabla, simples y compuestas), `UNIQUE` (inline y de
+  tabla), `CHECK` (de columna y de tabla) y `DEFAULT`. `RelationshipSpec.
+  nullable` se deriva de las columnas locales de la FK ya finalizadas (tras
+  aplicar el forzado de NOT NULL de una `PRIMARY KEY` de tabla, que puede
+  declararse después de la columna en el DDL): `True` solo si TODAS son
+  anulables. `ref_table` incluye el namespace cuando el DDL lo declara
+  explícitamente. `REFERENCES tabla` sin columnas (apunta implícitamente a
+  la PK del padre) deja `ref_columns=[]` con un aviso — esa resolución es
+  del grafo de dependencias (T1.6), no de este parser, que no asume que la
+  tabla referenciada ya se ha parseado. `ON DELETE`/`ON UPDATE` mapean a
+  `ReferentialAction`; `DEFERRABLE` (con o sin `INITIALLY DEFERRED`) marca
+  `deferrable=True`. Una `UNIQUE` cuyas columnas coinciden exactamente con
+  la PK no se duplica en `TableSpec.uniques`. `CheckSpec.ast_supported`
+  queda siempre en `False` y `bounds_derived` en `None` en esta entrega
+  (interpretar el predicado es T1.4); `columns_involved` sale de recorrer
+  el AST del predicado, no de parsear el texto. `DefaultSpec` distingue
+  literal (número, cadena, booleano, `NULL`, incluidos negativos) —
+  tipado en `value` — de expresión (`CURRENT_DATE`, `now()`,
+  `nextval(...)`) — solo `sql_text`. Snapshot golden de
+  `inmobiliaria.sql` actualizado: los avisos de FK/UNIQUE/CHECK de la
+  entrega 1 desaparecen (ese fixture no usa nada de la entrega 3), y las
+  relaciones/uniques/checks quedan reflejados en la IR.
+- `ir/schema.py`: `RelationshipSpec.cardinality_hint` pasa a
+  `CardinalityHint | None` (antes obligatorio) — el parser DDL no lo
+  rellena a propósito, lo infiere `graph/dependency.py` (T1.6); ya estaba
+  excluido del hash canónico. Corregida además la descripción de
+  `RelationshipSpec.nullable`, que decía "alguna columna admite NULL"
+  cuando la semántica real (y la que implementa el parser) es "TODAS las
+  columnas locales admiten NULL".
 
 ### Fixed
 

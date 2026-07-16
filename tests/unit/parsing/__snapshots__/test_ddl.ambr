@@ -95,6 +95,9 @@
         ]),
         'schema': None,
         'uniques': list([
+          list([
+            'email',
+          ]),
         ]),
       }),
       dict({
@@ -141,6 +144,14 @@
           }),
           dict({
             'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'tipo',
+                ]),
+                'sql_text': "tipo IN ('piso', 'chalet', 'adosado')",
+              }),
             ]),
             'comment': None,
             'default': None,
@@ -160,6 +171,14 @@
           }),
           dict({
             'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'superficie_m2',
+                ]),
+                'sql_text': 'superficie_m2 > 0',
+              }),
             ]),
             'comment': None,
             'default': None,
@@ -179,6 +198,14 @@
           }),
           dict({
             'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'anio_construccion',
+                ]),
+                'sql_text': 'anio_construccion BETWEEN 1900 AND 2026',
+              }),
             ]),
             'comment': None,
             'default': None,
@@ -218,6 +245,20 @@
         ]),
         'comment': None,
         'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'propietario_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'clientes',
+          }),
         ]),
         'kind': 'regular',
         'name': 'viviendas',
@@ -310,6 +351,14 @@
           }),
           dict({
             'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'precio',
+                ]),
+                'sql_text': 'precio > 0',
+              }),
             ]),
             'comment': None,
             'default': None,
@@ -330,6 +379,34 @@
         ]),
         'comment': None,
         'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'vivienda_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'viviendas',
+          }),
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'comprador_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'clientes',
+          }),
         ]),
         'kind': 'regular',
         'name': 'compraventas',
@@ -422,6 +499,14 @@
           }),
           dict({
             'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'importe',
+                ]),
+                'sql_text': 'importe > 0',
+              }),
             ]),
             'comment': None,
             'default': None,
@@ -442,6 +527,20 @@
         ]),
         'comment': None,
         'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'compraventa_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'compraventas',
+          }),
         ]),
         'kind': 'regular',
         'name': 'pagos',
@@ -450,21 +549,14 @@
         ]),
         'schema': None,
         'uniques': list([
+          list([
+            'compraventa_id',
+            'num_plazo',
+          ]),
         ]),
       }),
     ]),
     'warnings': list([
-      'tabla clientes, columna email: restricción UNIQUE no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla viviendas, columna tipo: restricción CHECK no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla viviendas, columna superficie_m2: restricción CHECK no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla viviendas, columna anio_construccion: restricción CHECK no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla viviendas, columna propietario_id: restricción FOREIGN KEY (REFERENCES) no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla compraventas, columna vivienda_id: restricción FOREIGN KEY (REFERENCES) no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla compraventas, columna comprador_id: restricción FOREIGN KEY (REFERENCES) no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla compraventas, columna precio: restricción CHECK no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla pagos, columna compraventa_id: restricción FOREIGN KEY (REFERENCES) no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla pagos, columna importe: restricción CHECK no soportada todavía; se ignora (ver docs/limitations.md)',
-      'tabla pagos: restricción de tabla UNIQUE no soportada todavía; se ignora (ver docs/limitations.md)',
     ]),
   })
 # ---
