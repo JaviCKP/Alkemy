@@ -37,6 +37,16 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   `is_enum`). Independiente de `sqlglot`: el parser DDL (T1.3) le pasa el
   nombre y los parámetros ya extraídos. Un tipo no reconocido nunca lanza
   excepción: degrada a `text` con un aviso registrado.
+- T1.5 — `ir/hashing.py`: `schema_hash()` calcula el SHA-256 de la forma
+  canónica de la IR, nunca del texto SQL. Ordena las `tables` por `name`
+  (mismas tablas en distinto orden ⇒ mismo hash); preserva el orden de las
+  `columns` dentro de cada tabla (identidad del esquema, afecta a los
+  `INSERT` posicionales ⇒ reordenarlas cambia el hash). Excluye del hash los
+  campos derivados que no proceden del DDL (`SchemaSpec.hash`,
+  `SchemaSpec.warnings`, `TableSpec.kind`,
+  `RelationshipSpec.cardinality_hint`, `CheckSpec.ast_supported`,
+  `CheckSpec.bounds_derived`) mediante un mapa de exclusión centralizado
+  (formato `include`/`exclude` avanzado de Pydantic v2), no casos sueltos.
 
 ### Fixed
 
