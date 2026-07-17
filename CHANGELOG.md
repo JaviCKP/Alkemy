@@ -8,6 +8,40 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- T1.8 — `cli.py`: nuevo subcomando `synthdb analyze RUTA.sql [--dialect]
+  [--json]` (Typer + Rich) que ejecuta el pipeline estructural completo
+  (`parse_ddl` → `interpret_checks` → `analyze_structure` → `resolve_cycles`)
+  y lo presenta sin generar datos: por cada tabla, sus columnas (tipo canónico,
+  nulabilidad, default), PK, FKs (con `cardinality_hint` y `deferrable`),
+  uniques, checks con sus cotas si `interpret_checks` los reconoció (y marcando
+  los que no), `kind` y comentario; luego las fases de generación en orden con
+  su tipo (Insert/InsertLeveled/Update/Deferred) y sus tablas; y al final todos
+  los avisos acumulados (parser + checks + grafo) agrupados por origen. `--json`
+  vuelca `{schema, phases, warnings}` con la serialización propia de cada modelo
+  (`model_dump`, nunca dicts a mano) y claves ordenadas, determinista byte a
+  byte. Códigos de salida sin traceback (CLAUDE.md): `0` correcto (con o sin
+  avisos), `1` `ParseError` (mensaje del parser tal cual), `2` `UnbreakableCycle`
+  (su diagnóstico accionable), `3` archivo inexistente o ilegible. Un callback
+  de la app mantiene `analyze` como subcomando con nombre propio en vez de
+  colapsarse en la raíz. En Windows fuerza UTF-8 en stdout/stderr para que Rich
+  no aborte con `UnicodeEncodeError` al emitir `→`/`⇒`/bordes de tabla sobre una
+  consola cp1252. El entry point `synthdb = "synthdb.cli:app"` ya estaba
+  declarado en `pyproject.toml`. Tests con `typer.testing.CliRunner`
+  (`tests/unit/cli/test_analyze.py`): los 10 fixtures con su código de salida,
+  avisos surgidos y agrupados, diagnóstico del ciclo irrompible, error de
+  sintaxis y ruta inexistente sin traceback, y `--json` parseable, con `kind`
+  por fase y determinista.
+- T1.9 — documentación de cierre del Hito 1. `docs/limitations.md` (estrena el
+  archivo), redactado desde el comportamiento real del código: DDL soportado y
+  construcciones que solo generan aviso, subconjunto de `CHECK` interpretado con
+  el porqué del recorte de `LIKE` (pospuesto entero) y `OR` (unión de rangos, no
+  una cota simple), y las tres salidas de ciclo más el caso irrompible.
+  `docs/adr/003-ir-congelada.md` congela `ir/schema.py` (todo cambio posterior
+  exige un ADR con campo, motivo e impacto en hash/snapshots) y deja explícito
+  que `ir/plans.py` NO se congela hasta que el motor del H2 lo consuma, con el
+  inventario de campos derivados excluidos del hash como punto de partida.
+  README: sección "Estado actual" con el ejemplo de `analyze` sobre
+  `inmobiliaria.sql` y enlace a `limitations.md`.
 - T1.6 — `graph/dependency.py`: `analyze_structure()` construye el grafo de
   dependencias (nodo por tabla, arista hijo→padre por cada FK cuya
   `ref_table` sea otra tabla del esquema; las autorreferencias no crean
