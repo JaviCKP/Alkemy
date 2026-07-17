@@ -8,6 +8,50 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- T1.6 — `graph/dependency.py`: `analyze_structure()` construye el grafo de
+  dependencias (nodo por tabla, arista hijo→padre por cada FK cuya
+  `ref_table` sea otra tabla del esquema; las autorreferencias no crean
+  arista, se anotan en `StructuralPlan.self_refs`), calcula sus componentes
+  fuertemente conexos vía `networkx` (Tarjan) y los organiza en fases con
+  `phase_layers()`: cada componente ocupa la fase más temprana que sus
+  dependencias permiten, fusionando en la misma fase las tablas
+  independientes entre sí (`tables_by_phase`, ordenado alfabéticamente
+  dentro de cada fase para determinismo total, CLAUDE.md). Una FK cuya
+  `ref_table` no existe en el esquema no añade arista: se registra como
+  aviso en `StructuralPlan.warnings` en vez de fallar. De paso rellena,
+  mutando `spec` in situ, los dos campos derivados que le corresponden
+  (`TableSpec.kind` y `RelationshipSpec.cardinality_hint`, ya excluidos del
+  hash canónico desde T1.5): `kind="bridge"` si la PK o un UNIQUE está
+  formada íntegramente por columnas de 2+ FK distintas y quedan ≤ 2 columnas
+  propias; `kind="lookup"` si la tabla no tiene FK salientes, tiene ≤ 3
+  columnas y alguien la referencia; `cardinality_hint="one_to_one"` si un
+  UNIQUE (o la PK) cae exactamente sobre las columnas de la FK,
+  `"self_reference"` si la FK apunta a la propia tabla, `"many_to_one"` en
+  el resto. `ir/plans.py` estrena el archivo con `StructuralPlan` y `FkRef`
+  (identifica una FK sin ambigüedad por tabla propietaria + columnas +
+  tabla referenciada).
+- T1.7 — `graph/strategies.py`: `resolve_cycles()` expande cada fase de un
+  `StructuralPlan` en la secuencia final de `Phase` (`ir/plans.py`:
+  `InsertPhase`, `InsertLeveledPhase`, `UpdatePhase`, `DeferredPhase`).
+  Autorreferencia (especificacion.md §6.3): FK anulable →
+  `InsertLeveledPhase` (niveles); FK `NOT NULL` diferible → `DeferredPhase`;
+  `NOT NULL` no diferible → `InsertLeveledPhase(roots_point_to_self=True)`
+  con aviso en `StructuralPlan.warnings` (única salida sin tocar el DDL: las
+  raíces se referencian a sí mismas). Ciclo real de 2+ tablas
+  (especificacion.md §6.2): la primera FK anulable del ciclo (desempate
+  alfabético por `(tabla, primera columna)`) se inserta a `NULL`
+  (`InsertPhase.null_fks`, con el resto del ciclo ya en orden de dependencia
+  vía `phase_layers()` sobre el subgrafo sin esa arista) seguida de una
+  `UpdatePhase` que asigna el valor real; si ninguna es anulable pero alguna
+  es diferible, `DeferredPhase`; si tampoco, `UnbreakableCycle` con
+  diagnóstico accionable (tablas y FK implicadas, las tres salidas
+  posibles: anulable, diferible o `--allow-ddl`, desaconsejado). Dentro de
+  cada fase estructural, las tablas que no son ni ciclo ni autorreferencia
+  se fusionan en un único `InsertPhase`; todas las unidades de una fase se
+  emiten ordenadas alfabéticamente por su tabla más temprana. `pyproject.toml`:
+  override de mypy (`ignore_missing_imports`) para `networkx`, que no
+  distribuye stubs de tipos.
+
 - Preparación del repositorio (Semana 0 del plan de ejecución del MVP):
   licencia Apache-2.0 (ADR-001), `pyproject.toml` con dependencias núcleo y
   extras `[db]`/`[dev]`, tooling de `ruff`/`mypy`/`pre-commit`, workflow de

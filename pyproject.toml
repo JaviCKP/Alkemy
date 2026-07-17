@@ -103,3 +103,7 @@ markers = [
 
 [tool.coverage.run]
 source = ["src/synthdb"]
+
+[[tool.mypy.overrides]]
+module = "networkx.*"
+ignore_missing_imports = true
