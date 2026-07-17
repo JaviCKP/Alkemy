@@ -1,30 +1,41 @@
 """`sqlglot` AST → `SchemaSpec` (T1.3, especificacion.md §5 y §4.1).
 
-Entrega 2 de 3 (plan-ejecucion-mvp.md, fila T1.3): añade FOREIGN KEY (inline
-y de tabla, simples y compuestas), UNIQUE (inline y de tabla), CHECK (de
-columna y de tabla) y DEFAULT a lo ya soportado en la entrega 1 (columnas,
-tipos, PRIMARY KEY). `CREATE TYPE ... AS ENUM`, `COMMENT ON` y
-`ALTER TABLE` quedan para la entrega 3.
+Entrega 3 de 3 (plan-ejecucion-mvp.md, fila T1.3), cierre del hito: añade
+`CREATE TYPE ... AS ENUM`, `COMMENT ON TABLE`/`COMMENT ON COLUMN` y
+`ALTER TABLE ... ADD CONSTRAINT` (FOREIGN KEY, UNIQUE, CHECK, PRIMARY KEY) a
+lo ya soportado en las entregas 1 (columnas, tipos, PRIMARY KEY) y 2 (FK,
+UNIQUE, CHECK, DEFAULT).
+
+El parseo recorre las sentencias en **dos pasadas** para que su orden en el
+archivo no importe: la primera resuelve todos los `CREATE TYPE` y
+`CREATE TABLE` (una tabla puede usar un enum declarado más abajo en el
+archivo); la segunda aplica `COMMENT ON` y `ALTER TABLE` sobre las tablas ya
+construidas, incluida una FK o PK que un `ALTER` añada después de su
+`CREATE TABLE` (ver `_PendingTable`, `_finalize_table`).
 
 Toda construcción del DDL que el parser reconozca pero no maneje todavía
-(enums, `COMMENT`, `GENERATED`, triggers, sentencias que no sean
-`CREATE TABLE`...) no aborta el parseo de lo que sí se soporta: se registra
-como aviso en `SchemaSpec.warnings` con la tabla (y columna, si aplica)
+(tipos de `CREATE TYPE` que no sean enum, `COMMENT ON` de objetos que no
+sean tabla/columna, variantes de `ALTER TABLE` distintas de `ADD
+CONSTRAINT`, `GENERATED`, triggers, sentencias que no sean `CREATE
+TABLE`...) no aborta el parseo de lo que sí se soporta: se registra como
+aviso en `SchemaSpec.warnings` con la tabla (y columna, si aplica)
 afectada, nunca en silencio (CLAUDE.md).
 
 La IR guarda la **identidad efectiva** de PostgreSQL para nombres de tabla,
 schema/namespace, columnas e identificadores de `PRIMARY KEY`/`FOREIGN
-KEY`/`UNIQUE`, no la grafía literal del DDL: PostgreSQL pliega a minúsculas
-todo identificador sin comillas (`CREATE TABLE Clientes` y
+KEY`/`UNIQUE`/tipo, no la grafía literal del DDL: PostgreSQL pliega a
+minúsculas todo identificador sin comillas (`CREATE TABLE Clientes` y
 `CREATE TABLE clientes` son la misma tabla) y conserva tal cual uno
 entrecomillado (`"MiTabla"` sigue siendo `MiTabla`). Sin este plegado, dos
 DDL equivalentes para PostgreSQL producirían IRs y hashes distintos, y la
 resolución de FK por nombre (grafo, T1.6) fallaría ante una diferencia que
-la base de datos ni ve. Ver `_identifier_name`.
+la base de datos ni ve. Los valores de un enum son literales, no
+identificadores, y por tanto no se pliegan. Ver `_identifier_name`.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 import sqlglot
@@ -47,6 +58,8 @@ _UNSUPPORTED_CONSTRAINT_LABELS: dict[type[exp.Expression], str] = {
     exp.GeneratedAsIdentityColumnConstraint: "GENERATED ... AS IDENTITY",
     exp.CommentColumnConstraint: "COMMENT",
     exp.CollateColumnConstraint: "COLLATE",
+    exp.ColumnDef: "ADD COLUMN",
+    exp.Drop: "DROP ...",
 }
 """Etiqueta legible para construcciones reconocidas pero aún no soportadas.
 
@@ -87,7 +100,10 @@ class ParseError(Exception):
 
 
 def parse_ddl(sql: str, dialect: str = "postgres") -> SchemaSpec:
-    """Parsea DDL `CREATE TABLE` a la IR canónica (`SchemaSpec`).
+    """Parsea DDL de PostgreSQL a la IR canónica (`SchemaSpec`).
+
+    Soporta `CREATE TABLE`, `CREATE TYPE ... AS ENUM`, `COMMENT ON
+    TABLE`/`COMMENT ON COLUMN` y `ALTER TABLE ... ADD CONSTRAINT`.
 
     Args:
         sql: Texto DDL completo; puede tener una o varias sentencias.
@@ -97,26 +113,49 @@ def parse_ddl(sql: str, dialect: str = "postgres") -> SchemaSpec:
             firma a esa promesa concreta.
 
     Returns:
-        La IR con las tablas reconocidas, en el orden en que aparecen en
-        `sql`. `hash` queda `None`: lo calcula `ir/hashing.py` en un paso
+        La IR con las tablas reconocidas, en el orden en que aparece su
+        `CREATE TABLE` en `sql` (el de `COMMENT ON`/`ALTER TABLE` no
+        importa). `hash` queda `None`: lo calcula `ir/hashing.py` en un paso
         posterior del pipeline, no este parser.
 
     Raises:
         ParseError: si `sql` contiene un error de sintaxis para `dialect`.
     """
     try:
-        statements = sqlglot.parse(sql, read=dialect)
+        parsed = sqlglot.parse(sql, read=dialect)
     except _SqlglotParseError as exc:
         raise _translate_parse_error(exc) from exc
 
-    tables: list[TableSpec] = []
+    statements = [statement for statement in parsed if statement is not None]
     warnings: list[str] = []
 
+    # Primera pasada, en dos sub-pasadas: todos los CREATE TYPE antes que
+    # todos los CREATE TABLE, para que una columna pueda usar un enum
+    # declarado más abajo en el archivo.
+    enum_types: dict[str, list[str]] = {}
     for statement in statements:
-        if statement is None:
-            continue
+        if isinstance(statement, exp.Create) and statement.kind == "TYPE":
+            _register_create_type(statement, enum_types, warnings)
+
+    pending_tables: dict[tuple[str | None, str], _PendingTable] = {}
+    order: list[tuple[str | None, str]] = []
+    for statement in statements:
         if isinstance(statement, exp.Create) and statement.kind == "TABLE":
-            tables.append(_parse_create_table(statement, dialect, warnings))
+            pending = _parse_create_table(statement, dialect, enum_types, warnings)
+            key = (pending.schema_name, pending.name)
+            pending_tables[key] = pending
+            order.append(key)
+
+    # Segunda pasada: COMMENT ON y ALTER TABLE sobre las tablas ya
+    # construidas; cualquier otra sentencia de nivel superior (incluidos los
+    # CREATE TYPE/CREATE TABLE, ya procesados arriba) queda fuera de aquí.
+    for statement in statements:
+        if isinstance(statement, exp.Create) and statement.kind in ("TYPE", "TABLE"):
+            continue
+        if isinstance(statement, exp.Comment):
+            _apply_comment(statement, pending_tables, warnings)
+        elif isinstance(statement, exp.Alter) and statement.kind == "TABLE":
+            _apply_alter_table(statement, pending_tables, dialect, warnings)
         else:
             approx = statement.sql(dialect=dialect)
             warnings.append(
@@ -124,6 +163,7 @@ def parse_ddl(sql: str, dialect: str = "postgres") -> SchemaSpec:
                 "(ver docs/limitations.md)"
             )
 
+    tables = [_finalize_table(pending_tables[key], warnings) for key in order]
     return SchemaSpec(dialect=dialect, tables=tables, warnings=warnings)
 
 
@@ -137,6 +177,24 @@ def _identifier_name(identifier: exp.Identifier) -> str:
     """
     name = str(identifier.this)
     return name if identifier.quoted else name.lower()
+
+
+def _schema_and_name(table_node: exp.Table) -> tuple[str | None, str]:
+    """`(schema, nombre)` de un nodo `Table`, ambos ya plegados.
+
+    Centraliza la extracción que antes se repetía en cada sitio que lee un
+    `Table` (tabla de un `CREATE TABLE`, objetivo de una `REFERENCES`, tabla
+    de un `COMMENT ON`/`ALTER TABLE`): mismo criterio de plegado en todos.
+    """
+    namespace = table_node.args.get("db")
+    schema_name = _identifier_name(namespace) if isinstance(namespace, exp.Identifier) else None
+    name = _identifier_name(table_node.this)
+    return schema_name, name
+
+
+def _qualified(schema_name: str | None, name: str) -> str:
+    """`"schema.nombre"`, o solo `"nombre"` si no hay schema."""
+    return f"{schema_name}.{name}" if schema_name else name
 
 
 def _translate_parse_error(exc: _SqlglotParseError) -> ParseError:
@@ -159,7 +217,7 @@ class _ColumnParseResult(NamedTuple):
 
     El llamador (`_parse_create_table`) usa `is_primary_key`/`is_unique` para
     acumular `TableSpec.primary_key`/`uniques`, y `reference` para diferir la
-    construcción del `RelationshipSpec` (ver `pending_foreign_keys`).
+    construcción del `RelationshipSpec` (ver `_PendingTable.pending_foreign_keys`).
     """
 
     column: ColumnSpec
@@ -168,116 +226,191 @@ class _ColumnParseResult(NamedTuple):
     reference: exp.Reference | None
 
 
-def _parse_create_table(statement: exp.Create, dialect: str, warnings: list[str]) -> TableSpec:
-    """Construye un `TableSpec` a partir de un nodo `CREATE TABLE`."""
+@dataclass
+class _PendingTable:
+    """Estado mutable de una tabla mientras se aplican CREATE/ALTER/COMMENT.
+
+    `_parse_create_table` la construye a partir de un `CREATE TABLE`;
+    `_apply_comment`/`_apply_alter_table` (segunda pasada) siguen
+    modificándola; `_finalize_table` la cierra a un `TableSpec` inmutable al
+    final, una vez que ningún `ALTER TABLE` posterior puede ya cambiar la
+    nulabilidad de sus columnas ni sus FK pendientes.
+    """
+
+    name: str
+    schema_name: str | None
+    columns: list[ColumnSpec]
+    inline_primary_key: list[str]
+    table_primary_key: list[str] | None = None
+    uniques: list[list[str]] = field(default_factory=list)
+    checks: list[CheckSpec] = field(default_factory=list)
+    comment: str | None = None
+    pending_foreign_keys: list[tuple[list[str], exp.Reference]] = field(default_factory=list)
+
+
+def _parse_create_table(
+    statement: exp.Create,
+    dialect: str,
+    enum_types: dict[str, list[str]],
+    warnings: list[str],
+) -> _PendingTable:
+    """Construye el `_PendingTable` de un nodo `CREATE TABLE`.
+
+    No fuerza todavía el `nullable=False` de la PK ni resuelve las FK
+    pendientes a `RelationshipSpec`: ambas cosas dependen del estado *final*
+    de la tabla, que un `ALTER TABLE` posterior en el mismo DDL puede seguir
+    cambiando. Eso lo hace `_finalize_table`, al cierre de la segunda pasada.
+    """
     schema_node = statement.this
     table_node = schema_node.this if isinstance(schema_node, exp.Schema) else schema_node
-    table_name = _identifier_name(table_node.this)
-    namespace = table_node.args.get("db")
-    schema_name = _identifier_name(namespace) if isinstance(namespace, exp.Identifier) else None
+    schema_name, table_name = _schema_and_name(table_node)
 
     entries = schema_node.expressions if isinstance(schema_node, exp.Schema) else []
 
     columns: list[ColumnSpec] = []
     inline_primary_key: list[str] = []
-    table_primary_key: list[str] | None = None
-    uniques: list[list[str]] = []
-    table_checks: list[CheckSpec] = []
-    # (columnas locales, nodo Reference) de cada FK vista, inline o de tabla.
-    # No se resuelve a RelationshipSpec al vuelo: su `nullable` depende del
-    # nullable *final* de esas columnas, y una PRIMARY KEY de tabla (que
-    # puede aparecer más abajo en el DDL, después de la columna) todavía
-    # puede forzarlas a NOT NULL. Se resuelven en un segundo paso, una vez
-    # cerrado `columns`.
-    pending_foreign_keys: list[tuple[list[str], exp.Reference]] = []
+    pending = _PendingTable(
+        name=table_name,
+        schema_name=schema_name,
+        columns=columns,
+        inline_primary_key=inline_primary_key,
+    )
 
     for entry in entries:
         if isinstance(entry, exp.ColumnDef):
-            result = _parse_column(entry, table_name, dialect, warnings)
+            result = _parse_column(entry, table_name, dialect, enum_types, warnings)
             columns.append(result.column)
             if result.is_primary_key:
                 inline_primary_key.append(result.column.name)
             if result.is_unique:
-                uniques.append([result.column.name])
+                pending.uniques.append([result.column.name])
             if result.reference is not None:
-                pending_foreign_keys.append(([result.column.name], result.reference))
+                pending.pending_foreign_keys.append(([result.column.name], result.reference))
             continue
 
         for item in _unwrap_table_constraint(entry):
-            if isinstance(item, exp.PrimaryKey):
-                table_primary_key = [
-                    _identifier_name(identifier) for identifier in item.expressions
-                ]
-            elif isinstance(item, exp.ForeignKey):
-                fk_columns = [_identifier_name(identifier) for identifier in item.expressions]
-                reference = item.args.get("reference")
-                if isinstance(reference, exp.Reference):
-                    pending_foreign_keys.append((fk_columns, reference))
-                else:
-                    warnings.append(
-                        f"tabla {table_name}: FOREIGN KEY ({', '.join(fk_columns)}) sin "
-                        "cláusula REFERENCES reconocible; se ignora"
-                    )
-            elif isinstance(item, exp.UniqueColumnConstraint):
-                uniques.append(_unique_constraint_columns(item))
-            elif isinstance(item, exp.CheckColumnConstraint):
-                table_checks.append(_build_check(item.this, dialect))
-            else:
-                label = _unsupported_construct_label(item)
-                warnings.append(
-                    f"tabla {table_name}: restricción de tabla {label} no soportada "
-                    "todavía; se ignora (ver docs/limitations.md)"
-                )
+            _apply_table_constraint(item, pending, dialect, warnings)
 
-    primary_key = table_primary_key if table_primary_key is not None else inline_primary_key
+    return pending
+
+
+def _finalize_table(pending: _PendingTable, warnings: list[str]) -> TableSpec:
+    """Cierra un `_PendingTable` a `TableSpec`, con todo `ALTER`/`COMMENT` ya aplicado.
+
+    Aquí, no antes, se fuerza `nullable=False` en las columnas de la PK
+    (inline, de tabla, o añadida después vía `ALTER TABLE ... ADD CONSTRAINT
+    PRIMARY KEY`) y se resuelven las FK pendientes contra el nullable *final*
+    de sus columnas locales.
+    """
+    primary_key = (
+        pending.table_primary_key
+        if pending.table_primary_key is not None
+        else pending.inline_primary_key
+    )
+
+    columns = pending.columns
+    uniques = pending.uniques
     if primary_key:
         pk_columns = set(primary_key)
         columns = [
             column.model_copy(update={"nullable": False}) if column.name in pk_columns else column
             for column in columns
         ]
-        # Una UNIQUE (inline o de tabla) sobre exactamente las columnas de la
-        # PK no aporta nada nuevo: la PK ya garantiza esa unicidad.
+        # Una UNIQUE (inline, de tabla o de ALTER) sobre exactamente las
+        # columnas de la PK no aporta nada nuevo: la PK ya garantiza esa
+        # unicidad.
         uniques = [group for group in uniques if set(group) != pk_columns]
 
     column_nullable = {column.name: column.nullable for column in columns}
     foreign_keys = [
-        _build_relationship(fk_columns, reference, column_nullable, table_name, warnings)
-        for fk_columns, reference in pending_foreign_keys
+        _build_relationship(fk_columns, reference, column_nullable, pending.name, warnings)
+        for fk_columns, reference in pending.pending_foreign_keys
     ]
 
     return TableSpec(
-        name=table_name,
-        schema=schema_name,
+        name=pending.name,
+        schema=pending.schema_name,
         columns=columns,
         primary_key=primary_key,
         foreign_keys=foreign_keys,
         uniques=uniques,
-        checks=table_checks,
+        checks=pending.checks,
+        comment=pending.comment,
     )
 
 
 def _unwrap_table_constraint(entry: exp.Expression) -> list[exp.Expression]:
     """Desenvuelve un `CONSTRAINT nombre (...)` con nombre a sus nodos internos.
 
-    Una restricción de tabla sin nombre (p. ej. `PRIMARY KEY (a, b)`) aparece
-    directamente en `schema.expressions`; una con nombre (`CONSTRAINT pk_t
-    PRIMARY KEY (a, b)`) llega envuelta en un nodo `Constraint` cuyo interés
-    real está en `.expressions`. Tratarlos igual evita duplicar el resto del
-    análisis para cada variante.
+    Una restricción sin nombre (p. ej. `PRIMARY KEY (a, b)`, tanto en un
+    `CREATE TABLE` como en un `ALTER TABLE ... ADD`) aparece directamente
+    como el nodo a tratar; una con nombre (`CONSTRAINT pk_t PRIMARY KEY (a,
+    b)`) llega envuelta en un nodo `Constraint` cuyo interés real está en
+    `.expressions`. Tratarlos igual evita duplicar el resto del análisis
+    para cada variante.
     """
     if isinstance(entry, exp.Constraint):
         return list(entry.expressions)
     return [entry]
 
 
+def _apply_table_constraint(
+    item: exp.Expression,
+    pending: _PendingTable,
+    dialect: str,
+    warnings: list[str],
+) -> None:
+    """Aplica una restricción de tabla (PK/FK/UNIQUE/CHECK) ya desenvuelta.
+
+    Común a las restricciones de tabla de un `CREATE TABLE` y a las de un
+    `ALTER TABLE ... ADD CONSTRAINT`: ambas llegan como el mismo tipo de nodo
+    de sqlglot, así que la entrega 3 reutiliza íntegra la lógica de la
+    entrega 2 en vez de duplicarla.
+    """
+    if isinstance(item, exp.PrimaryKey):
+        pending.table_primary_key = [
+            _identifier_name(identifier) for identifier in item.expressions
+        ]
+    elif isinstance(item, exp.ForeignKey):
+        fk_columns = [_identifier_name(identifier) for identifier in item.expressions]
+        reference = item.args.get("reference")
+        if isinstance(reference, exp.Reference):
+            pending.pending_foreign_keys.append((fk_columns, reference))
+        else:
+            warnings.append(
+                f"tabla {pending.name}: FOREIGN KEY ({', '.join(fk_columns)}) sin "
+                "cláusula REFERENCES reconocible; se ignora"
+            )
+    elif isinstance(item, exp.UniqueColumnConstraint):
+        pending.uniques.append(_unique_constraint_columns(item))
+    elif isinstance(item, exp.CheckColumnConstraint):
+        pending.checks.append(_build_check(item.this, dialect))
+    else:
+        label = _unsupported_construct_label(item)
+        warnings.append(
+            f"tabla {pending.name}: restricción de tabla {label} no soportada "
+            "todavía; se ignora (ver docs/limitations.md)"
+        )
+
+
 def _parse_column(
-    column_def: exp.ColumnDef, table_name: str, dialect: str, warnings: list[str]
+    column_def: exp.ColumnDef,
+    table_name: str,
+    dialect: str,
+    enum_types: dict[str, list[str]],
+    warnings: list[str],
 ) -> _ColumnParseResult:
     """Construye un `ColumnSpec` y señala sus restricciones inline (PK/UNIQUE/FK)."""
     column_name = _identifier_name(column_def.this)
     raw_type, precision, scale, length = _type_components(column_def.args["kind"], dialect)
-    mapping = map_postgres_type(raw_type, precision=precision, scale=scale, length=length)
+    enum_values = enum_types.get(raw_type)
+    mapping = map_postgres_type(
+        raw_type,
+        precision=precision,
+        scale=scale,
+        length=length,
+        is_enum=enum_values is not None,
+    )
     for warning in mapping.warnings:
         warnings.append(f"tabla {table_name}, columna {column_name}: {warning}")
 
@@ -301,7 +434,7 @@ def _parse_column(
         elif isinstance(kind, exp.DefaultColumnConstraint):
             default = _build_default(kind.this, dialect)
         elif isinstance(kind, exp.Reference):
-            # Resuelta en _parse_create_table (ver pending_foreign_keys):
+            # Resuelta en _finalize_table (ver _PendingTable.pending_foreign_keys):
             # aquí solo se conoce el nullable *provisional* de la columna.
             reference = kind
         else:
@@ -320,6 +453,7 @@ def _parse_column(
         type=mapping.type_spec,
         nullable=not forced_not_null,
         default=default,
+        enum_values=enum_values,
         checks=checks,
     )
     return _ColumnParseResult(
@@ -344,11 +478,8 @@ def _reference_target(reference: exp.Reference) -> tuple[str, list[str]]:
         table_node = target
         ref_columns = []
 
-    namespace = table_node.args.get("db")
-    ref_schema = _identifier_name(namespace) if isinstance(namespace, exp.Identifier) else None
-    ref_table_name = _identifier_name(table_node.this)
-    ref_table = f"{ref_schema}.{ref_table_name}" if ref_schema else ref_table_name
-    return ref_table, ref_columns
+    schema_name, table_name = _schema_and_name(table_node)
+    return _qualified(schema_name, table_name), ref_columns
 
 
 def _build_relationship(
@@ -358,7 +489,7 @@ def _build_relationship(
     table_name: str,
     warnings: list[str],
 ) -> RelationshipSpec:
-    """`RelationshipSpec` de una FK (inline o de tabla) ya resuelta contra `columns`."""
+    """`RelationshipSpec` de una FK (inline, de tabla o de ALTER) ya resuelta contra `columns`."""
     ref_table, ref_columns = _reference_target(reference)
     if not ref_columns:
         warnings.append(
@@ -475,13 +606,15 @@ def _type_components(
     `map_postgres_type` espera el nombre de tipo separado de sus parámetros;
     sqlglot los devuelve juntos en la forma renderizada (p. ej.
     `"VARCHAR(50)"`), de ahí la separación manual por el primer paréntesis.
-    Para tipos definidos por el usuario (candidatos a enum, entrega 3) no
-    hay paréntesis que cortar: el nombre real vive en `DataType.args["kind"]`.
+    Para tipos definidos por el usuario (candidatos a enum) no hay
+    paréntesis que cortar: el nombre real vive en `DataType.args["kind"]`, y
+    se pliega igual que cualquier otro identificador para poder buscarlo en
+    `enum_types` con independencia de cómo lo haya escrito el DDL.
     """
     if data_type.this == exp.DataType.Type.USERDEFINED:
         identifier = data_type.args.get("kind")
         raw_type = (
-            identifier.this
+            _identifier_name(identifier)
             if isinstance(identifier, exp.Identifier)
             else data_type.sql(dialect=dialect)
         )
@@ -497,6 +630,126 @@ def _type_components(
     first = params[0] if len(params) >= 1 else None
     second = params[1] if len(params) >= 2 else None
     return raw_type, first, second, first
+
+
+def _register_create_type(
+    statement: exp.Create,
+    enum_types: dict[str, list[str]],
+    warnings: list[str],
+) -> None:
+    """Registra un `CREATE TYPE ... AS ENUM` en `enum_types` (nombre ya plegado).
+
+    Cualquier otra variante de `CREATE TYPE` (compuesto `AS (...)`, `AS
+    RANGE`, tipo shell sin cuerpo...) no está soportada todavía: se registra
+    como aviso en vez de asumir un enum vacío o abortar el parseo.
+    """
+    type_name = _identifier_name(statement.this.this)
+    expression = statement.expression
+    if isinstance(expression, exp.DataType) and expression.this == exp.DataType.Type.ENUM:
+        enum_types[type_name] = [str(literal.this) for literal in expression.expressions]
+    else:
+        warnings.append(
+            f"CREATE TYPE {type_name}: solo se soporta la forma AS ENUM (...); esta "
+            "variante se ignora (ver docs/limitations.md)"
+        )
+
+
+def _column_ref(column_node: exp.Column) -> tuple[str | None, str, str]:
+    """`(schema, tabla, columna)` de un nodo `Column` de `COMMENT ON COLUMN`, plegados."""
+    namespace = column_node.args.get("db")
+    schema_name = _identifier_name(namespace) if isinstance(namespace, exp.Identifier) else None
+    table_identifier = column_node.args.get("table")
+    table_name = (
+        _identifier_name(table_identifier) if isinstance(table_identifier, exp.Identifier) else ""
+    )
+    column_name = _identifier_name(column_node.this)
+    return schema_name, table_name, column_name
+
+
+def _apply_comment(
+    statement: exp.Comment,
+    tables: dict[tuple[str | None, str], _PendingTable],
+    warnings: list[str],
+) -> None:
+    """Aplica un `COMMENT ON TABLE`/`COMMENT ON COLUMN` sobre una tabla ya parseada.
+
+    Una referencia a una tabla o columna que no aparece en este DDL, o un
+    `COMMENT ON` de otro tipo de objeto (índice, tipo...), se registra como
+    aviso: el comentario es metadato opcional y nunca bloquea el resto del
+    parseo (CLAUDE.md).
+    """
+    kind = statement.args.get("kind")
+    normalized_kind = kind.upper() if kind else ""
+    comment_text = statement.expression.this
+
+    if normalized_kind == "TABLE":
+        schema_name, table_name = _schema_and_name(statement.this)
+        pending = tables.get((schema_name, table_name))
+        if pending is None:
+            warnings.append(
+                f"COMMENT ON TABLE {_qualified(schema_name, table_name)}: la tabla no "
+                "está declarada en este DDL; se ignora"
+            )
+            return
+        pending.comment = comment_text
+    elif normalized_kind == "COLUMN":
+        schema_name, table_name, column_name = _column_ref(statement.this)
+        pending = tables.get((schema_name, table_name))
+        if pending is None:
+            warnings.append(
+                f"COMMENT ON COLUMN {_qualified(schema_name, table_name)}.{column_name}: "
+                "la tabla no está declarada en este DDL; se ignora"
+            )
+            return
+        for index, column in enumerate(pending.columns):
+            if column.name == column_name:
+                pending.columns[index] = column.model_copy(update={"comment": comment_text})
+                break
+        else:
+            warnings.append(
+                f"COMMENT ON COLUMN {pending.name}.{column_name}: la columna no está "
+                "declarada en la tabla; se ignora"
+            )
+    else:
+        warnings.append(
+            f"COMMENT ON {kind}: tipo de objeto no soportado todavía (solo TABLE y "
+            "COLUMN); se ignora (ver docs/limitations.md)"
+        )
+
+
+def _apply_alter_table(
+    statement: exp.Alter,
+    tables: dict[tuple[str | None, str], _PendingTable],
+    dialect: str,
+    warnings: list[str],
+) -> None:
+    """Aplica un `ALTER TABLE ... ADD CONSTRAINT` sobre una tabla ya parseada.
+
+    Solo `ADD CONSTRAINT` (FOREIGN KEY, UNIQUE, CHECK, PRIMARY KEY) está
+    soportado en esta entrega; otras variantes (`ADD COLUMN`, `DROP...`) y
+    un `ALTER TABLE` sobre una tabla no declarada en este DDL se registran
+    como aviso, nunca en silencio.
+    """
+    schema_name, table_name = _schema_and_name(statement.this)
+    pending = tables.get((schema_name, table_name))
+    if pending is None:
+        warnings.append(
+            f"ALTER TABLE {_qualified(schema_name, table_name)}: la tabla no está "
+            "declarada en este DDL; se ignora"
+        )
+        return
+
+    for action in statement.args.get("actions") or []:
+        if isinstance(action, exp.AddConstraint):
+            for item in action.expressions:
+                for constraint in _unwrap_table_constraint(item):
+                    _apply_table_constraint(constraint, pending, dialect, warnings)
+        else:
+            label = _unsupported_construct_label(action)
+            warnings.append(
+                f"tabla {pending.name}: ALTER TABLE {label} no soportado todavía; se "
+                "ignora (ver docs/limitations.md)"
+            )
 
 
 def _unsupported_construct_label(node: exp.Expression) -> str:

@@ -1,9 +1,10 @@
-"""Tests de src/synthdb/parsing/ddl.py (T1.3, entrega 2/3: FK, UNIQUE, CHECK, DEFAULT).
+"""Tests de src/synthdb/parsing/ddl.py (T1.3, entrega 3/3: enums, COMMENT ON, ALTER TABLE).
 
-La entrega 1 (columnas, tipos, PRIMARY KEY) ya está cubierta más abajo.
-Enums, `COMMENT ON` y `ALTER TABLE` son la entrega 3: aquí solo se comprueba
-que su presencia en el DDL no rompe el parseo de lo que sí se soporta y que
-queda registrada como aviso en vez de perderse en silencio (CLAUDE.md).
+Las entregas 1 (columnas, tipos, PRIMARY KEY) y 2 (FK, UNIQUE, CHECK,
+DEFAULT) ya están cubiertas más abajo. Esta entrega cierra el hito con
+`CREATE TYPE ... AS ENUM`, `COMMENT ON TABLE`/`COMMENT ON COLUMN` y
+`ALTER TABLE ... ADD CONSTRAINT`, más los snapshots golden de los 7 fixtures
+de `tests/schemas/` (criterio de aceptación de T1.3, plan-ejecucion-mvp.md §3).
 """
 
 from __future__ import annotations
@@ -585,4 +586,322 @@ def test_inmobiliaria_fixture_full_parse_golden_snapshot(snapshot: SnapshotAsser
 
     schema = parse_ddl(sql)
 
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+# --- Entrega 3/3: CREATE TYPE ... AS ENUM ------------------------------------
+
+
+def test_enum_type_declared_and_used_in_two_columns_in_order() -> None:
+    sql = """
+        CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');
+        CREATE TABLE t (
+            id INT PRIMARY KEY,
+            estado_actual mood NOT NULL,
+            estado_anterior mood
+        );
+    """
+
+    schema = parse_ddl(sql)
+
+    table = _table(schema, "t")
+    for column in table.columns[1:]:
+        assert column.type.kind == "enum"
+        assert column.enum_values == ["sad", "ok", "happy"]
+    assert schema.warnings == []
+
+
+def test_enum_type_name_folds_to_lowercase_but_values_are_preserved_verbatim() -> None:
+    # El nombre del tipo se pliega como cualquier identificador de PostgreSQL
+    # (declarado "Mood", usado "MOOD", ambos plegan a "mood"); los valores
+    # son literales, no identificadores, y no se tocan.
+    sql = """
+        CREATE TYPE Mood AS ENUM ('Sad', 'OK', 'Happy');
+        CREATE TABLE t (id INT PRIMARY KEY, estado MOOD);
+    """
+
+    column = _table(parse_ddl(sql), "t").columns[1]
+
+    assert column.type.kind == "enum"
+    assert column.enum_values == ["Sad", "OK", "Happy"]
+
+
+def test_enum_declared_after_the_table_that_uses_it_still_resolves() -> None:
+    # Dos pasadas: todos los CREATE TYPE antes que todos los CREATE TABLE,
+    # así que el orden de aparición en el archivo no importa.
+    sql = """
+        CREATE TABLE t (id INT PRIMARY KEY, estado mood);
+        CREATE TYPE mood AS ENUM ('a', 'b');
+    """
+
+    column = _table(parse_ddl(sql), "t").columns[1]
+
+    assert column.type.kind == "enum"
+    assert column.enum_values == ["a", "b"]
+
+
+def test_create_type_that_is_not_enum_is_a_warning() -> None:
+    sql = "CREATE TYPE point_type AS (x INT, y INT);"
+
+    schema = parse_ddl(sql)
+
+    assert schema.tables == []
+    assert any("point_type" in warning for warning in schema.warnings)
+
+
+# --- Entrega 3/3: COMMENT ON TABLE / COMMENT ON COLUMN -----------------------
+
+
+def test_comment_on_table_and_column_are_captured() -> None:
+    sql = """
+        CREATE TABLE personas (
+            id INT PRIMARY KEY,
+            nombre TEXT NOT NULL
+        );
+        COMMENT ON TABLE personas IS 'Registro de personas';
+        COMMENT ON COLUMN personas.nombre IS 'Nombre completo';
+    """
+
+    schema = parse_ddl(sql)
+
+    table = _table(schema, "personas")
+    assert table.comment == "Registro de personas"
+    assert table.columns[1].comment == "Nombre completo"
+    assert schema.warnings == []
+
+
+def test_comment_on_table_before_its_create_table_in_the_file_still_works() -> None:
+    sql = """
+        COMMENT ON TABLE personas IS 'Registro de personas';
+        CREATE TABLE personas (id INT PRIMARY KEY);
+    """
+
+    table = _table(parse_ddl(sql), "personas")
+
+    assert table.comment == "Registro de personas"
+
+
+def test_comment_on_table_that_does_not_exist_is_a_warning() -> None:
+    sql = "COMMENT ON TABLE noexiste IS 'x';"
+
+    schema = parse_ddl(sql)
+
+    assert any("noexiste" in warning for warning in schema.warnings)
+
+
+def test_comment_on_column_that_does_not_exist_is_a_warning() -> None:
+    sql = """
+        CREATE TABLE t (id INT PRIMARY KEY);
+        COMMENT ON COLUMN t.noexiste IS 'x';
+    """
+
+    schema = parse_ddl(sql)
+
+    assert any("noexiste" in warning for warning in schema.warnings)
+
+
+def test_comment_on_other_object_kind_is_a_warning_not_a_crash() -> None:
+    sql = "COMMENT ON INDEX idx_t_nombre IS 'un indice';"
+
+    schema = parse_ddl(sql)
+
+    assert schema.tables == []
+    assert len(schema.warnings) == 1
+
+
+# --- Entrega 3/3: ALTER TABLE ... ADD CONSTRAINT -----------------------------
+
+
+def test_alter_table_add_composite_foreign_key() -> None:
+    sql = """
+        CREATE TABLE reparaciones (
+            id INT NOT NULL,
+            pieza_ref INT NOT NULL,
+            PRIMARY KEY (id, pieza_ref)
+        );
+        CREATE TABLE reparacion_piezas (
+            reparacion_id INT NOT NULL,
+            pieza_id INT NOT NULL
+        );
+        ALTER TABLE reparacion_piezas
+            ADD CONSTRAINT fk_rp FOREIGN KEY (reparacion_id, pieza_id)
+            REFERENCES reparaciones(id, pieza_ref);
+    """
+
+    schema = parse_ddl(sql)
+
+    fk = _table(schema, "reparacion_piezas").foreign_keys[0]
+    assert fk.columns == ["reparacion_id", "pieza_id"]
+    assert fk.ref_table == "reparaciones"
+    assert fk.ref_columns == ["id", "pieza_ref"]
+    assert fk.nullable is False
+    assert schema.warnings == []
+
+
+def test_alter_table_add_primary_key_forces_nullable_false_retroactively() -> None:
+    sql = """
+        CREATE TABLE t (
+            id INT,
+            nombre TEXT
+        );
+        ALTER TABLE t ADD CONSTRAINT t_pkey PRIMARY KEY (id);
+    """
+
+    table = _table(parse_ddl(sql), "t")
+
+    assert table.primary_key == ["id"]
+    assert table.columns[0].nullable is False
+    assert table.columns[1].nullable is True
+
+
+def test_alter_table_add_primary_key_also_forces_nullable_false_on_a_referencing_fk() -> None:
+    # La FK ya declarada inline en el CREATE TABLE debe reflejar el nullable
+    # *final* de su columna, incluida una PK que llega después vía ALTER.
+    sql = """
+        CREATE TABLE t (
+            a INT REFERENCES other(id)
+        );
+        ALTER TABLE t ADD CONSTRAINT t_pkey PRIMARY KEY (a);
+    """
+
+    fk = _table(parse_ddl(sql), "t").foreign_keys[0]
+
+    assert fk.nullable is False
+
+
+def test_alter_table_on_unknown_table_is_a_warning_not_a_crash() -> None:
+    sql = "ALTER TABLE noexiste ADD CONSTRAINT fk1 FOREIGN KEY (a) REFERENCES otros(id);"
+
+    schema = parse_ddl(sql)
+
+    assert schema.tables == []
+    assert any("noexiste" in warning for warning in schema.warnings)
+
+
+def test_alter_table_add_column_is_a_warning_not_a_crash() -> None:
+    sql = """
+        CREATE TABLE t (id INT PRIMARY KEY);
+        ALTER TABLE t ADD COLUMN nombre TEXT;
+    """
+
+    schema = parse_ddl(sql)
+
+    table = _table(schema, "t")
+    assert [c.name for c in table.columns] == ["id"]
+    assert any("t" in warning for warning in schema.warnings)
+
+
+# --- Entrega 3/3: snapshots golden de los 7 fixtures (T1.3, criterio de -----
+# --- aceptación, plan-ejecucion-mvp.md §3) -----------------------------------
+
+
+def test_cementerio_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -> None:
+    """`COMMENT ON TABLE`/`COMMENT ON COLUMN`, FK inline, CHECK y UNIQUE."""
+    sql = (_SCHEMAS_DIR / "cementerio.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_taller_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -> None:
+    """Tabla puente (`reparacion_piezas`) con PK compuesta íntegramente de FKs."""
+    sql = (_SCHEMAS_DIR / "taller.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_ecommerce_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -> None:
+    """Esquema de volumen: FK, CHECK, UNIQUE compuesta y DEFAULT numérico."""
+    sql = (_SCHEMAS_DIR / "ecommerce.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_rrhh_autoref_nullable_fixture_full_parse_golden_snapshot(
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Autorreferencia `manager_id` anulable."""
+    sql = (_SCHEMAS_DIR / "rrhh_autoref_nullable.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_rrhh_autoref_notnull_fixture_full_parse_golden_snapshot(
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Autorreferencia `manager_id` NOT NULL y no diferible."""
+    sql = (_SCHEMAS_DIR / "rrhh_autoref_notnull.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_ciclos_nullable_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -> None:
+    """Ciclo rompible: FK vía ALTER TABLE anulable (`pedidos.factura_id`)."""
+    sql = (_SCHEMAS_DIR / "ciclos_nullable.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    pedidos = _table(schema, "pedidos")
+    assert pedidos.foreign_keys[0].nullable is True
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_ciclos_deferrable_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -> None:
+    """Ciclo rompible solo por FK diferible: ambas FK vía ALTER TABLE, DEFERRABLE."""
+    sql = (_SCHEMAS_DIR / "ciclos_deferrable.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    pedidos = _table(schema, "pedidos")
+    facturas = _table(schema, "facturas")
+    assert pedidos.foreign_keys[0].deferrable is True
+    assert facturas.foreign_keys[0].deferrable is True
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_ciclos_unbreakable_fixture_full_parse_golden_snapshot(
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Ciclo irrompible: ambas FK NOT NULL y ninguna diferible (una vía ALTER TABLE).
+
+    Detectar y diagnosticar el ciclo irrompible es trabajo de T1.7
+    (`graph/strategies.py`); a este parser solo le corresponde representar
+    fielmente que ninguna de las dos FK es anulable ni diferible.
+    """
+    sql = (_SCHEMAS_DIR / "ciclos_unbreakable.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    pedidos = _table(schema, "pedidos")
+    facturas = _table(schema, "facturas")
+    assert pedidos.foreign_keys[0].nullable is False
+    assert pedidos.foreign_keys[0].deferrable is False
+    assert facturas.foreign_keys[0].deferrable is False
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_opaco_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -> None:
+    """Nombres opacos, cero metadatos: debe parsear 100% válido pese a no decir nada."""
+    sql = (_SCHEMAS_DIR / "opaco.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
     assert schema.model_dump(mode="json", by_alias=True) == snapshot

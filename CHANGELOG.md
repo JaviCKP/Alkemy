@@ -94,6 +94,36 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   `RelationshipSpec.nullable`, que decía "alguna columna admite NULL"
   cuando la semántica real (y la que implementa el parser) es "TODAS las
   columnas locales admiten NULL".
+- T1.3 (entrega 3 de 3, cierre del hito) — `parsing/ddl.py`: añade
+  `CREATE TYPE ... AS ENUM`, `COMMENT ON TABLE`/`COMMENT ON COLUMN` y
+  `ALTER TABLE ... ADD CONSTRAINT`. El parseo pasa a recorrer las sentencias
+  en dos pasadas para que su orden en el archivo no importe: la primera
+  resuelve todos los `CREATE TYPE` y `CREATE TABLE` (una tabla puede usar un
+  enum declarado más abajo en el archivo); la segunda aplica `COMMENT ON` y
+  `ALTER TABLE` sobre las tablas ya construidas. Un `CREATE TABLE` ya no se
+  cierra a `TableSpec` de inmediato: queda como `_PendingTable` mutable
+  hasta el final de la segunda pasada, porque un `ALTER TABLE` posterior
+  puede seguir añadiendo su PK o sus FK — el forzado de `nullable=False` en
+  las columnas de la PK y la resolución de `RelationshipSpec` (que depende
+  de ese nullable final) se difieren en bloque a `_finalize_table`.
+  `ALTER TABLE ... ADD CONSTRAINT` reutiliza íntegra la lógica de
+  restricciones de tabla de la entrega 2 (`_apply_table_constraint`), tanto
+  para FK/UNIQUE/CHECK como para una `PRIMARY KEY` que llega después del
+  `CREATE TABLE` original. Toda variante no soportada (`CREATE TYPE` que no
+  sea `AS ENUM`, `COMMENT ON` de un objeto que no sea tabla/columna,
+  `ALTER TABLE ADD COLUMN`/`DROP...`, un `ALTER`/`COMMENT` sobre una tabla o
+  columna no declarada en el propio DDL) se registra como aviso, nunca en
+  silencio. El nombre de un tipo `enum` se pliega como cualquier
+  identificador (de paso, corrige el mismo plegado que le faltaba al tipo
+  definido por el usuario en `_type_components`, sin efecto observable hasta
+  ahora porque nada lo ejercitaba); sus valores son literales y no se
+  pliegan. Snapshots golden de los 9 archivos de fixture restantes
+  (`cementerio`, `taller`, `ecommerce`, `rrhh_autoref` ×2, `ciclos` ×3,
+  `opaco`), con 0 avisos en los 7: cierra el criterio de aceptación de T1.3
+  (plan-ejecucion-mvp.md §3, snapshot de IR correcto para los 7 fixtures).
+  Las FK que `ciclos_nullable.sql`/`ciclos_deferrable.sql`/
+  `ciclos_unbreakable.sql` declaran vía `ALTER TABLE ... ADD CONSTRAINT`
+  aparecen ahora como `RelationshipSpec` en vez de como aviso.
 
 ### Fixed
 
