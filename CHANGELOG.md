@@ -47,6 +47,83 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   `RelationshipSpec.cardinality_hint`, `CheckSpec.ast_supported`,
   `CheckSpec.bounds_derived`) mediante un mapa de exclusión centralizado
   (formato `include`/`exclude` avanzado de Pydantic v2), no casos sueltos.
+- T1.3 (entrega 1 de 3) — `parsing/ddl.py`: `parse_ddl()` convierte
+  sentencias `CREATE TABLE` de PostgreSQL (AST de sqlglot, dialecto
+  explícito) en `TableSpec`: nombre de tabla y schema/namespace, columnas en
+  su orden original, tipos vía `map_postgres_type` (sus avisos se propagan a
+  `SchemaSpec.warnings`), `NOT NULL` y `PRIMARY KEY` tanto inline como a
+  nivel de tabla (simple y compuesta). Una columna en la PK queda siempre
+  `nullable=False`, aparezca o no un `NOT NULL` explícito en el DDL (PK lo
+  implica en PostgreSQL). FK, `UNIQUE`, `CHECK`, `DEFAULT`, enums y
+  comentarios quedan para las entregas 2 y 3: toda construcción que el
+  parser reconoce pero todavía no maneja (incluidas sentencias que no son
+  `CREATE TABLE`, p. ej. `ALTER TABLE`/`CREATE INDEX`) se registra como
+  aviso con tabla y columna, nunca en silencio. Un error de sintaxis se
+  traduce a un `ParseError` propio con línea, columna y sentencia
+  aproximada — nunca se propaga el `sqlglot.errors.ParseError` original.
+  Primer snapshot golden de la IR (syrupy,
+  `tests/unit/parsing/__snapshots__/test_ddl.ambr`) parseando
+  `tests/schemas/inmobiliaria.sql` completo.
+- T1.3 (entrega 2 de 3) — `parsing/ddl.py`: añade `FOREIGN KEY` (inline vía
+  `REFERENCES` y de tabla, simples y compuestas), `UNIQUE` (inline y de
+  tabla), `CHECK` (de columna y de tabla) y `DEFAULT`. `RelationshipSpec.
+  nullable` se deriva de las columnas locales de la FK ya finalizadas (tras
+  aplicar el forzado de NOT NULL de una `PRIMARY KEY` de tabla, que puede
+  declararse después de la columna en el DDL): `True` solo si TODAS son
+  anulables. `ref_table` incluye el namespace cuando el DDL lo declara
+  explícitamente. `REFERENCES tabla` sin columnas (apunta implícitamente a
+  la PK del padre) deja `ref_columns=[]` con un aviso — esa resolución es
+  del grafo de dependencias (T1.6), no de este parser, que no asume que la
+  tabla referenciada ya se ha parseado. `ON DELETE`/`ON UPDATE` mapean a
+  `ReferentialAction`; `DEFERRABLE` (con o sin `INITIALLY DEFERRED`) marca
+  `deferrable=True`. Una `UNIQUE` cuyas columnas coinciden exactamente con
+  la PK no se duplica en `TableSpec.uniques`. `CheckSpec.ast_supported`
+  queda siempre en `False` y `bounds_derived` en `None` en esta entrega
+  (interpretar el predicado es T1.4); `columns_involved` sale de recorrer
+  el AST del predicado, no de parsear el texto. `DefaultSpec` distingue
+  literal (número, cadena, booleano, `NULL`, incluidos negativos) —
+  tipado en `value` — de expresión (`CURRENT_DATE`, `now()`,
+  `nextval(...)`) — solo `sql_text`. Snapshot golden de
+  `inmobiliaria.sql` actualizado: los avisos de FK/UNIQUE/CHECK de la
+  entrega 1 desaparecen (ese fixture no usa nada de la entrega 3), y las
+  relaciones/uniques/checks quedan reflejados en la IR.
+- `ir/schema.py`: `RelationshipSpec.cardinality_hint` pasa a
+  `CardinalityHint | None` (antes obligatorio) — el parser DDL no lo
+  rellena a propósito, lo infiere `graph/dependency.py` (T1.6); ya estaba
+  excluido del hash canónico. Corregida además la descripción de
+  `RelationshipSpec.nullable`, que decía "alguna columna admite NULL"
+  cuando la semántica real (y la que implementa el parser) es "TODAS las
+  columnas locales admiten NULL".
+- T1.3 (entrega 3 de 3, cierre del hito) — `parsing/ddl.py`: añade
+  `CREATE TYPE ... AS ENUM`, `COMMENT ON TABLE`/`COMMENT ON COLUMN` y
+  `ALTER TABLE ... ADD CONSTRAINT`. El parseo pasa a recorrer las sentencias
+  en dos pasadas para que su orden en el archivo no importe: la primera
+  resuelve todos los `CREATE TYPE` y `CREATE TABLE` (una tabla puede usar un
+  enum declarado más abajo en el archivo); la segunda aplica `COMMENT ON` y
+  `ALTER TABLE` sobre las tablas ya construidas. Un `CREATE TABLE` ya no se
+  cierra a `TableSpec` de inmediato: queda como `_PendingTable` mutable
+  hasta el final de la segunda pasada, porque un `ALTER TABLE` posterior
+  puede seguir añadiendo su PK o sus FK — el forzado de `nullable=False` en
+  las columnas de la PK y la resolución de `RelationshipSpec` (que depende
+  de ese nullable final) se difieren en bloque a `_finalize_table`.
+  `ALTER TABLE ... ADD CONSTRAINT` reutiliza íntegra la lógica de
+  restricciones de tabla de la entrega 2 (`_apply_table_constraint`), tanto
+  para FK/UNIQUE/CHECK como para una `PRIMARY KEY` que llega después del
+  `CREATE TABLE` original. Toda variante no soportada (`CREATE TYPE` que no
+  sea `AS ENUM`, `COMMENT ON` de un objeto que no sea tabla/columna,
+  `ALTER TABLE ADD COLUMN`/`DROP...`, un `ALTER`/`COMMENT` sobre una tabla o
+  columna no declarada en el propio DDL) se registra como aviso, nunca en
+  silencio. El nombre de un tipo `enum` se pliega como cualquier
+  identificador (de paso, corrige el mismo plegado que le faltaba al tipo
+  definido por el usuario en `_type_components`, sin efecto observable hasta
+  ahora porque nada lo ejercitaba); sus valores son literales y no se
+  pliegan. Snapshots golden de los 9 archivos de fixture restantes
+  (`cementerio`, `taller`, `ecommerce`, `rrhh_autoref` ×2, `ciclos` ×3,
+  `opaco`), con 0 avisos en los 7: cierra el criterio de aceptación de T1.3
+  (plan-ejecucion-mvp.md §3, snapshot de IR correcto para los 7 fixtures).
+  Las FK que `ciclos_nullable.sql`/`ciclos_deferrable.sql`/
+  `ciclos_unbreakable.sql` declaran vía `ALTER TABLE ... ADD CONSTRAINT`
+  aparecen ahora como `RelationshipSpec` en vez de como aviso.
 
 ### Fixed
 

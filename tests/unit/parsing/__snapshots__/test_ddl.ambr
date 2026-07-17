@@ -1,0 +1,3227 @@
+# serializer version: 1
+# name: test_cementerio_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+          dict({
+            'ast_supported': False,
+            'bounds_derived': None,
+            'columns_involved': list([
+              'fecha_fallecimiento',
+              'fecha_nacimiento',
+            ]),
+            'sql_text': 'fecha_fallecimiento > fecha_nacimiento',
+          }),
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_nacimiento',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': 'Fecha de defunción, siempre posterior al nacimiento',
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_fallecimiento',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': 'Personas fallecidas registradas para inhumación',
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'personas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'codigo',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'varchar',
+              'length': 20,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'tipo',
+                ]),
+                'sql_text': "tipo IN ('nicho', 'panteon', 'fosa', 'columbario')",
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'tipo',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'capacidad',
+                ]),
+                'sql_text': 'capacidad > 0',
+              }),
+            ]),
+            'comment': 'Número máximo de restos que admite la sepultura',
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'capacidad',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'sepulturas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'codigo',
+          ]),
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'persona_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'sepultura_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_entierro',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'responsable',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': 'Un entierro por persona; ocupa una plaza en una sepultura con capacidad limitada',
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'persona_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'personas',
+          }),
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'sepultura_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'sepulturas',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'entierros',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'persona_id',
+          ]),
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_ciclos_deferrable_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'factura_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'factura_id',
+            ]),
+            'deferrable': True,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'facturas',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'pedidos',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'numero',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'varchar',
+              'length': 20,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'pedido_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'pedido_id',
+            ]),
+            'deferrable': True,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'pedidos',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'facturas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'numero',
+          ]),
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_ciclos_nullable_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'factura_id',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'factura_id',
+            ]),
+            'deferrable': False,
+            'nullable': True,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'facturas',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'pedidos',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'numero',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'varchar',
+              'length': 20,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'pedido_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'pedido_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'pedidos',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'facturas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'numero',
+          ]),
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_ciclos_unbreakable_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'factura_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'factura_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'facturas',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'pedidos',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'numero',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'varchar',
+              'length': 20,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'pedido_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'pedido_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'pedidos',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'facturas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'numero',
+          ]),
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_ecommerce_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'email',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_alta',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'clientes',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'email',
+          ]),
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'categorias',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'nombre',
+          ]),
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'categoria_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'precio',
+                ]),
+                'sql_text': 'precio > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'precio',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 10,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'stock',
+                ]),
+                'sql_text': 'stock >= 0',
+              }),
+            ]),
+            'comment': None,
+            'default': dict({
+              'kind': 'literal',
+              'sql_text': '0',
+              'value': 0,
+            }),
+            'enum_values': None,
+            'generated': False,
+            'name': 'stock',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'categoria_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'categorias',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'productos',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'cliente_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'timestamp',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': False,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'estado',
+                ]),
+                'sql_text': "estado IN ('pendiente', 'pagado', 'enviado', 'entregado', 'cancelado')",
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'estado',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'total',
+                ]),
+                'sql_text': 'total >= 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'total',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 12,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'cliente_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'clientes',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'pedidos',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'pedido_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'producto_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'cantidad',
+                ]),
+                'sql_text': 'cantidad > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'cantidad',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'precio_unitario',
+                ]),
+                'sql_text': 'precio_unitario > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'precio_unitario',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 10,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'pedido_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'pedidos',
+          }),
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'producto_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'productos',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'lineas_pedido',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'pedido_id',
+            'producto_id',
+          ]),
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_inmobiliaria_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'email',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_alta',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'clientes',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'email',
+          ]),
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'direccion',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'tipo',
+                ]),
+                'sql_text': "tipo IN ('piso', 'chalet', 'adosado')",
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'tipo',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'superficie_m2',
+                ]),
+                'sql_text': 'superficie_m2 > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'superficie_m2',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 7,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'anio_construccion',
+                ]),
+                'sql_text': 'anio_construccion BETWEEN 1900 AND 2026',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'anio_construccion',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'propietario_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'propietario_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'clientes',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'viviendas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'vivienda_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'comprador_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'precio',
+                ]),
+                'sql_text': 'precio > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'precio',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 12,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'vivienda_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'viviendas',
+          }),
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'comprador_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'clientes',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'compraventas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'compraventa_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'num_plazo',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'importe',
+                ]),
+                'sql_text': 'importe > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'importe',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 12,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'compraventa_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'compraventas',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'pagos',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'compraventa_id',
+            'num_plazo',
+          ]),
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_opaco_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'c1',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'c2',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'varchar',
+              'length': 50,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'c3',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'c7',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 10,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'cod_x',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'char',
+              'length': 2,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 't1',
+        'primary_key': list([
+          'c1',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'c1',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'ref_t1',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'c4',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': dict({
+              'kind': 'literal',
+              'sql_text': 'FALSE',
+              'value': False,
+            }),
+            'enum_values': None,
+            'generated': False,
+            'name': 'c5',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'boolean',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'val',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 12,
+              'scale': 4,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'ref_t1',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'c1',
+            ]),
+            'ref_table': 't1',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 't2',
+        'primary_key': list([
+          'c1',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_rrhh_autoref_notnull_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'puesto',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_contratacion',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'manager_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'manager_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'empleados',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'empleados',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_rrhh_autoref_nullable_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'puesto',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_contratacion',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'manager_id',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'manager_id',
+            ]),
+            'deferrable': False,
+            'nullable': True,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'empleados',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'empleados',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_taller_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'telefono',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'varchar',
+              'length': 20,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'clientes',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'cliente_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'matricula',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'varchar',
+              'length': 10,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'marca',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'modelo',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'anio',
+                ]),
+                'sql_text': 'anio BETWEEN 1980 AND 2026',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'anio',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'cliente_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'clientes',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'vehiculos',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+          list([
+            'matricula',
+          ]),
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'precio_unitario',
+                ]),
+                'sql_text': 'precio_unitario > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'precio_unitario',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 10,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'piezas',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+          dict({
+            'ast_supported': False,
+            'bounds_derived': None,
+            'columns_involved': list([
+              'fecha_salida',
+              'fecha_entrada',
+            ]),
+            'sql_text': 'fecha_salida IS NULL OR fecha_salida >= fecha_entrada',
+          }),
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': True,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'vehiculo_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_entrada',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'fecha_salida',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'date',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'descripcion',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'vehiculo_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'vehiculos',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'reparaciones',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'reparacion_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'pieza_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'cantidad',
+                ]),
+                'sql_text': 'cantidad > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'cantidad',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 32,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+              dict({
+                'ast_supported': False,
+                'bounds_derived': None,
+                'columns_involved': list([
+                  'precio_aplicado',
+                ]),
+                'sql_text': 'precio_aplicado > 0',
+              }),
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'precio_aplicado',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'kind': 'numeric',
+              'length': None,
+              'precision': 10,
+              'scale': 2,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'reparacion_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'reparaciones',
+          }),
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'pieza_id',
+            ]),
+            'deferrable': False,
+            'nullable': False,
+            'on_delete': None,
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'piezas',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'reparacion_piezas',
+        'primary_key': list([
+          'reparacion_id',
+          'pieza_id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---

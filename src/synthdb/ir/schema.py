@@ -122,8 +122,16 @@ class RelationshipSpec(IRModel):
     on_delete: ReferentialAction | None = None
     on_update: ReferentialAction | None = None
     deferrable: bool = False
-    nullable: bool = Field(description="`True` si alguna columna de la FK admite NULL.")
-    cardinality_hint: CardinalityHint
+    nullable: bool = Field(
+        description="`True` solo si TODAS las columnas locales de la FK admiten NULL."
+    )
+    cardinality_hint: CardinalityHint | None = Field(
+        default=None,
+        description=(
+            "`None` hasta que `graph/dependency.py` (T1.6) la infiere; el parser DDL "
+            "no la rellena. Campo excluido del hash (ir/hashing.py)."
+        ),
+    )
 
 
 class TableSpec(IRModel):
