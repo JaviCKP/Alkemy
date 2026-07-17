@@ -223,6 +223,51 @@ def test_changing_relationship_cardinality_hint_does_not_change_hash() -> None:
     assert schema_hash(schema) == schema_hash(mutated)
 
 
+# --- ADR-004: is_array/match_full/on_delete_set_columns son estructurales -----
+# --- (entran en el hash); nullable_columns es derivado (no entra) -------------
+
+
+def test_changing_type_is_array_changes_hash() -> None:
+    schema = _build_example_schema()
+    clientes = schema.tables[0]
+    nombre = clientes.columns[1]
+    array_type = nombre.type.model_copy(update={"is_array": True})
+    array_nombre = nombre.model_copy(update={"type": array_type})
+    columns = [clientes.columns[0], array_nombre, clientes.columns[2]]
+    mutated = _with_table(schema, 0, clientes.model_copy(update={"columns": columns}))
+
+    assert schema_hash(schema) != schema_hash(mutated)
+
+
+def test_changing_relationship_match_full_changes_hash() -> None:
+    schema = _build_example_schema()
+    pedidos = schema.tables[1]
+    fk = pedidos.foreign_keys[0].model_copy(update={"match_full": True})
+    mutated = _with_table(schema, 1, pedidos.model_copy(update={"foreign_keys": [fk]}))
+
+    assert schema_hash(schema) != schema_hash(mutated)
+
+
+def test_changing_relationship_on_delete_set_columns_changes_hash() -> None:
+    schema = _build_example_schema()
+    pedidos = schema.tables[1]
+    fk = pedidos.foreign_keys[0].model_copy(
+        update={"on_delete": "set_null", "on_delete_set_columns": ["cliente_id"]}
+    )
+    mutated = _with_table(schema, 1, pedidos.model_copy(update={"foreign_keys": [fk]}))
+
+    assert schema_hash(schema) != schema_hash(mutated)
+
+
+def test_changing_relationship_nullable_columns_does_not_change_hash() -> None:
+    schema = _build_example_schema()
+    pedidos = schema.tables[1]
+    fk = pedidos.foreign_keys[0].model_copy(update={"nullable_columns": ["cliente_id"]})
+    mutated = _with_table(schema, 1, pedidos.model_copy(update={"foreign_keys": [fk]}))
+
+    assert schema_hash(schema) == schema_hash(mutated)
+
+
 def test_changing_check_ast_supported_does_not_change_hash() -> None:
     schema = _build_example_schema()
     pedidos = schema.tables[1]

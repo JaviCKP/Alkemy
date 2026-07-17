@@ -131,27 +131,50 @@ def map_postgres_type(
     scale: int | None = None,
     length: int | None = None,
     is_enum: bool = False,
+    is_array: bool = False,
 ) -> TypeMappingResult:
     """Traduce un tipo de columna de PostgreSQL al catálogo canónico de la IR.
 
     Args:
         raw_type: Nombre del tipo tal como aparece en el DDL (`INT`,
             `varchar`, `NUMERIC`, `timestamptz`...). No sensible a
-            mayúsculas ni a espacios extra.
+            mayúsculas ni a espacios extra. Para un array (`text[]`) es el
+            nombre del ELEMENTO (`text`); el sufijo `[]` no llega aquí (lo
+            detecta el parser DDL desde el AST y lo pasa como `is_array`).
         precision: Precisión declarada en `NUMERIC(precision, scale)`.
         scale: Escala declarada en `NUMERIC(precision, scale)`.
         length: Longitud declarada en `VARCHAR(length)`/`CHAR(length)`.
         is_enum: `True` si `raw_type` nombra un tipo `CREATE TYPE ... AS ENUM`
             ya reconocido por el llamador, en vez de un tipo base de
             PostgreSQL.
+        is_array: `True` si la columna es un array (`text[]`, `numeric(7,2)[]`).
+            El `kind` y los parámetros siguen siendo los del elemento; solo se
+            marca `TypeSpec.is_array` (ADR-004).
 
     Returns:
         El `TypeSpec` canónico junto con los avisos generados (lista vacía
         si el tipo se reconoció sin ambigüedad). Un tipo no reconocido nunca
         lanza una excepción: degrada a `TypeSpec(kind="text")` con un aviso.
     """
+    type_spec, warnings = _map_element_type(
+        raw_type, precision=precision, scale=scale, length=length, is_enum=is_enum
+    )
+    if is_array:
+        type_spec = type_spec.model_copy(update={"is_array": True})
+    return TypeMappingResult(type_spec, warnings)
+
+
+def _map_element_type(
+    raw_type: str,
+    *,
+    precision: int | None,
+    scale: int | None,
+    length: int | None,
+    is_enum: bool,
+) -> tuple[TypeSpec, list[str]]:
+    """Traduce el tipo del elemento (sin la dimensión de array) a `TypeSpec`."""
     if is_enum:
-        return TypeMappingResult(TypeSpec(kind="enum"), [])
+        return TypeSpec(kind="enum"), []
 
     normalized = _normalize(raw_type)
     kind = _POSTGRES_TYPE_MAP.get(normalized)
@@ -162,10 +185,10 @@ def map_postgres_type(
             "sin restricciones. Añade un mapeo en parsing/types.py o registra "
             "el caso en docs/limitations.md."
         )
-        return TypeMappingResult(TypeSpec(kind="text"), [warning])
+        return TypeSpec(kind="text"), [warning]
 
     if kind == "integer":
-        return TypeMappingResult(
+        return (
             TypeSpec(
                 kind="integer",
                 autoincrement=normalized in _AUTOINCREMENT_ALIASES,
@@ -177,14 +200,12 @@ def map_postgres_type(
         if normalized in _FLOAT_ALIASES:
             # float(p) selecciona real vs. double (tamaño de almacenamiento),
             # no una precisión decimal: no se propaga como numeric(p, s).
-            return TypeMappingResult(TypeSpec(kind="numeric"), [])
-        return TypeMappingResult(TypeSpec(kind="numeric", precision=precision, scale=scale), [])
+            return TypeSpec(kind="numeric"), []
+        return TypeSpec(kind="numeric", precision=precision, scale=scale), []
     if kind == "varchar":
-        return TypeMappingResult(TypeSpec(kind="varchar", length=length), [])
+        return TypeSpec(kind="varchar", length=length), []
     if kind == "char":
-        return TypeMappingResult(TypeSpec(kind="char", length=length), [])
+        return TypeSpec(kind="char", length=length), []
     if kind == "timestamp":
-        return TypeMappingResult(
-            TypeSpec(kind="timestamp", with_timezone=normalized in _TIMEZONE_AWARE_ALIASES), []
-        )
-    return TypeMappingResult(TypeSpec(kind=kind), [])
+        return TypeSpec(kind="timestamp", with_timezone=normalized in _TIMEZONE_AWARE_ALIASES), []
+    return TypeSpec(kind=kind), []

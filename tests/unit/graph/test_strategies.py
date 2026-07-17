@@ -162,6 +162,62 @@ def test_unbreakable_cycle_raises_with_tables_and_fks_in_the_diagnostic() -> Non
     assert "--allow-ddl" in message
 
 
+# --- Nulabilidad dirigida de FK compuestas (ADR-004) --------------------------
+
+
+def test_directed_nullability_breaks_a_composite_cycle_by_the_nullable_column() -> None:
+    # Fixture 11: el ciclo clientes↔matches tiene FK compuestas
+    # (inmobiliaria_id NOT NULL, *_id NULL). Bajo MATCH SIMPLE se rompe anulando
+    # SOLO la columna anulable (match_id), no la FK entera: Insert(null_fks con
+    # columnas concretas) + Update de esas mismas columnas, nunca UnbreakableCycle.
+    phases, plan = _resolve_fixture("crm_real_minimo")
+
+    assert plan.sccs == [["clientes", "matches"]]
+
+    inserts_with_nulls = [
+        phase for phase in phases if isinstance(phase, InsertPhase) and phase.null_fks
+    ]
+    assert len(inserts_with_nulls) == 1
+    null_fks = inserts_with_nulls[0].null_fks
+    assert len(null_fks) == 1
+    null_fk = null_fks[0]
+    assert null_fk.table == "clientes"
+    assert null_fk.ref_table == "matches"
+    assert null_fk.columns == ["inmobiliaria_id", "match_id"]  # la FK entera se identifica
+    assert null_fk.null_columns == ["match_id"]  # pero solo se anula la columna anulable
+
+    updates = [phase for phase in phases if isinstance(phase, UpdatePhase)]
+    assert updates == [UpdatePhase(table="clientes", columns=["match_id"])]
+
+
+def test_match_full_composite_cycle_with_a_not_null_column_stays_unbreakable() -> None:
+    # Con MATCH FULL un NULL parcial viola la FK: si alguna columna del ciclo es
+    # NOT NULL, la FK no se puede anular parcialmente y el ciclo sigue siendo
+    # irrompible (ADR-004), aunque bajo MATCH SIMPLE sí se rompería (test de arriba).
+    sql = """
+        CREATE TABLE a (
+            inmobiliaria_id INT NOT NULL,
+            id INT,
+            b_id INT NOT NULL,
+            PRIMARY KEY (inmobiliaria_id, id),
+            FOREIGN KEY (inmobiliaria_id, b_id) REFERENCES b (inmobiliaria_id, id) MATCH FULL
+        );
+        CREATE TABLE b (
+            inmobiliaria_id INT NOT NULL,
+            id INT,
+            a_id INT,
+            PRIMARY KEY (inmobiliaria_id, id),
+            FOREIGN KEY (inmobiliaria_id, a_id) REFERENCES a (inmobiliaria_id, id) MATCH FULL
+        );
+    """
+    plan, schema = _plan_and_schema(sql)
+
+    # b→a tiene a_id anulable: bajo MATCH SIMPLE rompería, pero es MATCH FULL.
+    assert plan.sccs == [["a", "b"]]
+    with pytest.raises(UnbreakableCycle):
+        resolve_cycles(plan, schema)
+
+
 # --- Determinismo --------------------------------------------------------------
 
 
@@ -171,6 +227,7 @@ def test_unbreakable_cycle_raises_with_tables_and_fks_in_the_diagnostic() -> Non
         "cementerio",
         "ciclos_deferrable",
         "ciclos_nullable",
+        "crm_real_minimo",
         "ecommerce",
         "inmobiliaria",
         "opaco",

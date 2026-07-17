@@ -41,7 +41,11 @@ abajo.
 - **`NOT NULL`**.
 - **`FOREIGN KEY`**: inline (`REFERENCES`) y de tabla, simples y compuestas;
   `ON DELETE` / `ON UPDATE` (`CASCADE`, `RESTRICT`, `SET NULL`, `SET DEFAULT`,
-  `NO ACTION`); `DEFERRABLE [INITIALLY DEFERRED]`.
+  `NO ACTION`); la variante de PostgreSQL 15+ que acota `SET NULL`/`SET DEFAULT`
+  a columnas concretas, `ON DELETE SET NULL (columna, …)`, se conserva en
+  `RelationshipSpec.on_delete_set_columns` (ADR-004; el dialecto base de sqlglot
+  no la parsea, la añade `parsing/dialect.py`); `MATCH FULL` (frente al
+  `MATCH SIMPLE` por defecto); `DEFERRABLE [INITIALLY DEFERRED]`.
 - **`UNIQUE`**: inline y de tabla. Una `UNIQUE` cuyas columnas coinciden
   exactamente con la `PRIMARY KEY` se descarta por redundante.
 - **`CHECK`**: de columna y de tabla. Su interpretación a cotas de generación
@@ -67,6 +71,13 @@ abajo.
   `timestamptz`/`timestamp with time zone` (conserva la zona horaria).
 - **Otros**: `boolean`/`bool`, `uuid`, `json`/`jsonb`, `bytea`.
 - **Enums** declarados con `CREATE TYPE ... AS ENUM`.
+- **Arrays** (`text[]`, `numeric(7,2)[]`): se detectan desde el AST (nunca del
+  texto) y se marca `TypeSpec.is_array`; el `kind` y los parámetros siguen
+  siendo los del elemento (`text[]` ⇒ `kind='text'`; `numeric(7,2)[]` conserva
+  `precision`/`scale`). Un array multidimensional (`text[][]`) se representa como
+  una sola dimensión con un aviso, igual que hace PostgreSQL en la práctica. La
+  **generación** de valores de array es del Hito 2; el Hito 1 solo representa y
+  analiza (ADR-004).
 
 Un tipo de PostgreSQL sin mapeo conocido **no aborta el parseo**: degrada a
 `text` (el tipo más permisivo) con un aviso. Esto mantiene el proceso en marcha
@@ -153,10 +164,16 @@ ninguna es posible sin modificar el DDL se detiene con error.
 
 En este orden de preferencia:
 
-1. **Alguna FK del ciclo admite NULL** (desempate alfabético por `(tabla,
-   primera columna)`): esa FK se inserta a `NULL` (el resto del ciclo, ya en
-   orden de dependencia) y una fase de `UPDATE` posterior le asigna el valor
-   real. *(Fixture: `ciclos_nullable.sql`.)*
+1. **Alguna FK del ciclo se puede anular** (desempate alfabético por `(tabla,
+   primera columna)`): se insertan a `NULL` solo las columnas anulables de esa
+   FK (el resto del ciclo, ya en orden de dependencia) y una fase de `UPDATE`
+   posterior les asigna su valor real. Con `MATCH SIMPLE` (defecto) basta con
+   que la FK tenga alguna columna anulable —se anula solo esa, aunque el resto
+   sea `NOT NULL`, como la clave `(inmobiliaria_id, entidad_id)` del esquema
+   real—; con `MATCH FULL` se exige que TODAS sus columnas admitan `NULL`,
+   porque un `NULL` parcial la viola (ADR-004). La `InsertPhase`/`UpdatePhase`
+   registran qué columnas se anulan, no solo qué FK. *(Fixtures:
+   `ciclos_nullable.sql`, `crm_real_minimo.sql`.)*
 2. **Ninguna es anulable, pero alguna es `DEFERRABLE`**: todas las tablas del
    ciclo se insertan en una única transacción con las constraints diferidas.
    *(Fixture: `ciclos_deferrable.sql`.)*

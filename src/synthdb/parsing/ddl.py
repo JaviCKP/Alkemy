@@ -51,6 +51,11 @@ from synthdb.ir.schema import (
     SchemaSpec,
     TableSpec,
 )
+from synthdb.parsing.dialect import (
+    POSTGRES_SET_NULL_COLUMNS,
+    SET_NULL_COLUMNS_ARG,
+    PostgresSetNullColumns,
+)
 from synthdb.parsing.types import map_postgres_type
 
 _UNSUPPORTED_CONSTRAINT_LABELS: dict[type[exp.Expression], str] = {
@@ -121,8 +126,15 @@ def parse_ddl(sql: str, dialect: str = "postgres") -> SchemaSpec:
     Raises:
         ParseError: si `sql` contiene un error de sintaxis para `dialect`.
     """
+    # Para PostgreSQL se usa el dialecto extendido (ADR-004): acepta la lista
+    # de columnas de `ON DELETE SET NULL (…)` de PostgreSQL 15 que el dialecto
+    # base rechaza. Es un superconjunto del parser base, así que no cambia nada
+    # para un DDL que no use esa sintaxis.
+    read: str | PostgresSetNullColumns = (
+        POSTGRES_SET_NULL_COLUMNS if dialect == "postgres" else dialect
+    )
     try:
-        parsed = sqlglot.parse(sql, read=dialect)
+        parsed = sqlglot.parse(sql, read=read)
     except _SqlglotParseError as exc:
         raise _translate_parse_error(exc) from exc
 
@@ -402,17 +414,25 @@ def _parse_column(
 ) -> _ColumnParseResult:
     """Construye un `ColumnSpec` y señala sus restricciones inline (PK/UNIQUE/FK)."""
     column_name = _identifier_name(column_def.this)
-    raw_type, precision, scale, length = _type_components(column_def.args["kind"], dialect)
-    enum_values = enum_types.get(raw_type)
+    components = _type_components(column_def.args["kind"], dialect)
+    enum_values = enum_types.get(components.raw_type)
     mapping = map_postgres_type(
-        raw_type,
-        precision=precision,
-        scale=scale,
-        length=length,
+        components.raw_type,
+        precision=components.precision,
+        scale=components.scale,
+        length=components.length,
         is_enum=enum_values is not None,
+        is_array=components.is_array,
     )
     for warning in mapping.warnings:
         warnings.append(f"tabla {table_name}, columna {column_name}: {warning}")
+    if components.multidimensional:
+        original = column_def.args["kind"].sql(dialect=dialect)
+        warnings.append(
+            f"tabla {table_name}, columna {column_name}: array multidimensional "
+            f"{original!r}; se representa como una sola dimensión (ADR-004; ver "
+            "docs/limitations.md)"
+        )
 
     not_null = False
     is_primary_key = False
@@ -502,6 +522,7 @@ def _build_relationship(
     on_delete: ReferentialAction | None = None
     on_update: ReferentialAction | None = None
     deferrable = False
+    match_full = False
     for option in reference.args.get("options") or []:
         # sqlglot conserva la grafía original de DELETE/UPDATE en `option`
         # (p. ej. "ON delete CASCADE" si el DDL los escribió en minúsculas);
@@ -509,6 +530,11 @@ def _build_relationship(
         normalized = option.upper()
         if normalized == "DEFERRABLE":
             deferrable = True
+        elif normalized == "MATCH FULL":
+            # MATCH SIMPLE (defecto) y MATCH PARTIAL no se distinguen del
+            # defecto para la rotura de ciclos; solo MATCH FULL cambia la
+            # política (NULL parcial la viola). Ver ADR-004 y graph/strategies.
+            match_full = True
         elif normalized.startswith("ON DELETE "):
             on_delete = _ON_ACTION_MAP.get(normalized.removeprefix("ON DELETE "))
         elif normalized.startswith("ON UPDATE "):
@@ -520,12 +546,45 @@ def _build_relationship(
         ref_columns=ref_columns,
         on_delete=on_delete,
         on_update=on_update,
+        on_delete_set_columns=_set_null_columns(reference, columns, table_name, warnings),
         deferrable=deferrable,
+        match_full=match_full,
         nullable=all(column_nullable.get(name, True) for name in columns),
+        # Derivado: subconjunto anulable de la FK (ADR-004). Excluido del hash.
+        nullable_columns=[name for name in columns if column_nullable.get(name, True)],
         # Derivado por graph/dependency.py (T1.6), no por este parser; ver
         # ir/schema.py y CLAUDE.md.
         cardinality_hint=None,
     )
+
+
+def _set_null_columns(
+    reference: exp.Reference,
+    columns: list[str],
+    table_name: str,
+    warnings: list[str],
+) -> list[str]:
+    """Columnas de `ON DELETE SET NULL/SET DEFAULT (…)`, plegadas y validadas.
+
+    El dialecto extendido (`parsing/dialect.py`, ADR-004) adjunta los
+    identificadores de la lista de PostgreSQL 15 al argumento
+    `SET_NULL_COLUMNS_ARG` de la `Reference`. Deben ser un subconjunto de las
+    columnas locales de la FK; si el DDL nombra alguna ajena, se conserva pero
+    se emite un aviso (CLAUDE.md: nada en silencio).
+    """
+    nodes = reference.args.get(SET_NULL_COLUMNS_ARG) or []
+    set_columns = [_identifier_name(node) for node in nodes if isinstance(node, exp.Identifier)]
+
+    fk_columns = set(columns)
+    extraneous = [name for name in set_columns if name not in fk_columns]
+    if extraneous:
+        warnings.append(
+            f"tabla {table_name}: FOREIGN KEY ({', '.join(columns)}) declara "
+            f"ON DELETE SET NULL/DEFAULT sobre columnas ajenas a la FK "
+            f"({', '.join(extraneous)}); se conservan pero revisa el DDL "
+            "(ver docs/limitations.md)"
+        )
+    return set_columns
 
 
 def _unique_constraint_columns(item: exp.UniqueColumnConstraint) -> list[str]:
@@ -598,19 +657,45 @@ def _build_default(expression: exp.Expression, dialect: str) -> DefaultSpec:
     return DefaultSpec(kind="expression", sql_text=sql_text, value=None)
 
 
-def _type_components(
-    data_type: exp.DataType, dialect: str
-) -> tuple[str, int | None, int | None, int | None]:
-    """Extrae `(nombre_de_tipo, precision, scale, length)` de un `DataType`.
+class _TypeComponents(NamedTuple):
+    """Componentes de un tipo de columna, ya separada su dimensión de array.
 
-    `map_postgres_type` espera el nombre de tipo separado de sus parámetros;
-    sqlglot los devuelve juntos en la forma renderizada (p. ej.
-    `"VARCHAR(50)"`), de ahí la separación manual por el primer paréntesis.
-    Para tipos definidos por el usuario (candidatos a enum) no hay
-    paréntesis que cortar: el nombre real vive en `DataType.args["kind"]`, y
-    se pliega igual que cualquier otro identificador para poder buscarlo en
-    `enum_types` con independencia de cómo lo haya escrito el DDL.
+    `raw_type`/`precision`/`scale`/`length` describen el tipo del ELEMENTO
+    (`text[]` ⇒ `raw_type="text"`), listos para `map_postgres_type`. `is_array`
+    marca que la columna es un array; `multidimensional`, que el DDL declaró más
+    de una dimensión (`text[][]`), que se colapsa a una sola con aviso (ADR-004).
     """
+
+    raw_type: str
+    precision: int | None
+    scale: int | None
+    length: int | None
+    is_array: bool
+    multidimensional: bool
+
+
+def _type_components(data_type: exp.DataType, dialect: str) -> _TypeComponents:
+    """Extrae los componentes de un `DataType`, desenvolviendo su dimensión de array.
+
+    El sufijo de array se detecta SIEMPRE desde el AST de sqlglot (`DataType`
+    con `this == ARRAY`), nunca desde el texto (ADR-004, CLAUDE.md); el tipo del
+    elemento se procesa igual que un escalar. `map_postgres_type` espera el
+    nombre de tipo separado de sus parámetros; sqlglot los devuelve juntos en la
+    forma renderizada (`"VARCHAR(50)"`), de ahí la separación por el primer
+    paréntesis. Para tipos definidos por el usuario (candidatos a enum) no hay
+    paréntesis que cortar: el nombre real vive en `DataType.args["kind"]`, y se
+    pliega igual que cualquier otro identificador para buscarlo en `enum_types`.
+    """
+    is_array = False
+    multidimensional = False
+    while data_type.this == exp.DataType.Type.ARRAY:
+        element = data_type.expressions[0] if data_type.expressions else None
+        if not isinstance(element, exp.DataType):
+            break
+        multidimensional = is_array  # una segunda vuelta ⇒ array de arrays (text[][])
+        is_array = True
+        data_type = element
+
     if data_type.this == exp.DataType.Type.USERDEFINED:
         identifier = data_type.args.get("kind")
         raw_type = (
@@ -618,7 +703,7 @@ def _type_components(
             if isinstance(identifier, exp.Identifier)
             else data_type.sql(dialect=dialect)
         )
-        return raw_type, None, None, None
+        return _TypeComponents(raw_type, None, None, None, is_array, multidimensional)
 
     rendered = data_type.sql(dialect=dialect)
     raw_type = rendered.split("(", 1)[0].strip()
@@ -629,7 +714,7 @@ def _type_components(
     ]
     first = params[0] if len(params) >= 1 else None
     second = params[1] if len(params) >= 2 else None
-    return raw_type, first, second, first
+    return _TypeComponents(raw_type, first, second, first, is_array, multidimensional)
 
 
 def _register_create_type(

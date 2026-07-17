@@ -151,6 +151,21 @@ def test_integer_aliases_carry_their_bit_width(raw_type, expected_bits) -> None:
     assert result.type_spec.bits == expected_bits
 
 
+def test_is_array_marks_the_type_without_changing_the_element() -> None:
+    # El sufijo [] lo detecta el parser desde el AST y lo pasa como is_array; el
+    # kind y los parámetros siguen siendo los del elemento (ADR-004).
+    assert map_postgres_type("text", is_array=True).type_spec == TypeSpec(
+        kind="text", is_array=True
+    )
+    assert map_postgres_type("numeric", precision=7, scale=2, is_array=True).type_spec == TypeSpec(
+        kind="numeric", precision=7, scale=2, is_array=True
+    )
+
+
+def test_is_array_is_false_by_default() -> None:
+    assert map_postgres_type("text").type_spec.is_array is False
+
+
 @pytest.mark.parametrize("raw_type", ["real", "float4", "double precision", "float8", "float"])
 def test_float_family_maps_to_numeric_dropping_any_precision(raw_type) -> None:
     # El argumento de float(p) selecciona real vs. double, no una precisión

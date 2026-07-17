@@ -60,7 +60,8 @@ class _Edge:
     table: str
     columns: list[str]
     ref_table: str
-    nullable: bool
+    nullable_columns: list[str]
+    match_full: bool
     deferrable: bool
 
 
@@ -82,38 +83,57 @@ def _edges_within(members: set[str], by_name: dict[str, TableSpec]) -> list[_Edg
                     table=table.name,
                     columns=fk.columns,
                     ref_table=target.name,
-                    nullable=fk.nullable,
+                    nullable_columns=fk.nullable_columns,
+                    match_full=fk.match_full,
                     deferrable=fk.deferrable,
                 )
             )
     return sorted(edges, key=lambda edge: (edge.table, edge.columns[0]))
 
 
+def _null_break_columns(edge: _Edge) -> list[str]:
+    """Columnas a anular para romper el ciclo por esta FK, o `[]` si no es posible.
+
+    Nulabilidad dirigida (ADR-004): bajo `MATCH SIMPLE` (defecto) basta con que
+    la FK tenga alguna columna anulable —se anulan esas y el resto se inserta
+    con su valor real—; bajo `MATCH FULL` un NULL parcial viola la restricción,
+    así que solo es rompible si TODAS sus columnas admiten NULL.
+    """
+    if not edge.nullable_columns:
+        return []
+    if edge.match_full and len(edge.nullable_columns) != len(edge.columns):
+        return []
+    return edge.nullable_columns
+
+
 def _resolve_cycle(members: list[str], by_name: dict[str, TableSpec]) -> list[Phase]:
-    """Rompe un ciclo real de 2+ tablas siguiendo especificacion.md §6.2."""
+    """Rompe un ciclo real de 2+ tablas siguiendo especificacion.md §6.2 y ADR-004."""
     edges = _edges_within(set(members), by_name)
 
-    nullable_edge = next((edge for edge in edges if edge.nullable), None)
-    if nullable_edge is not None:
+    for edge in edges:
+        null_columns = _null_break_columns(edge)
+        if not null_columns:
+            continue
         remainder: nx.DiGraph = nx.DiGraph()
         remainder.add_nodes_from(members)
-        for edge in edges:
-            if edge is nullable_edge:
+        for other in edges:
+            if other is edge:
                 continue
-            remainder.add_edge(edge.table, edge.ref_table)
+            remainder.add_edge(other.table, other.ref_table)
         inner_order = [name for layer in phase_layers(remainder) for name in layer]
 
         insert = InsertPhase(
             tables=inner_order,
             null_fks=[
                 FkRef(
-                    table=nullable_edge.table,
-                    columns=nullable_edge.columns,
-                    ref_table=nullable_edge.ref_table,
+                    table=edge.table,
+                    columns=edge.columns,
+                    ref_table=edge.ref_table,
+                    null_columns=null_columns,
                 )
             ],
         )
-        update = UpdatePhase(table=nullable_edge.table, columns=nullable_edge.columns)
+        update = UpdatePhase(table=edge.table, columns=null_columns)
         return [insert, update]
 
     deferrable_edge = next((edge for edge in edges if edge.deferrable), None)
@@ -177,7 +197,8 @@ def resolve_cycles(plan: StructuralPlan, spec: SchemaSpec) -> list[Phase]:
         plan: Salida de `graph/dependency.py::analyze_structure` (T1.6).
         spec: El mismo esquema ya analizado (con `kind`/`cardinality_hint`
             ya rellenados por T1.6, aunque este módulo solo necesita
-            `nullable`/`deferrable`/`columns` de cada `RelationshipSpec`).
+            `nullable_columns`/`match_full`/`deferrable`/`columns` de cada
+            `RelationshipSpec`).
 
     Returns:
         La secuencia ordenada de fases de ejecución.

@@ -23,6 +23,18 @@ class FkRef(IRModel):
     table: str = Field(description="Tabla propietaria de la FK (el «hijo»).")
     columns: list[str] = Field(description="Columnas locales de la FK, en orden de declaración.")
     ref_table: str = Field(description="Tabla referenciada (el «padre»).")
+    null_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Subconjunto de `columns` que se inserta a NULL para romper un ciclo, "
+            "cuando este `FkRef` aparece en `InsertPhase.null_fks`. Bajo "
+            "`MATCH SIMPLE` puede ser solo parte de la FK (p. ej. `entidad_id` de "
+            "`(inmobiliaria_id, entidad_id)`, con `inmobiliaria_id` a su valor "
+            "real); bajo `MATCH FULL` son todas. Vacío fuera de ese contexto "
+            "(p. ej. en `UnbreakableCycle.edges`, que solo identifica la FK). "
+            "Ver ADR-004."
+        ),
+    )
 
 
 class StructuralPlan(IRModel):
@@ -68,15 +80,22 @@ class InsertPhase(IRModel):
     """Inserción de una o más tablas sin dependencias pendientes entre sí.
 
     Cuando `null_fks` no está vacío, esta fase rompe un ciclo: las columnas
-    listadas se insertan a `NULL` y una `UpdatePhase` posterior les asigna
-    su valor real (especificacion.md §6.2, opción 1).
+    de `FkRef.null_columns` se insertan a `NULL` y una `UpdatePhase` posterior
+    les asigna su valor real (especificacion.md §6.2, opción 1). Bajo
+    `MATCH SIMPLE` esas columnas pueden ser solo una parte de la FK compuesta
+    —el resto se inserta con su valor real— y bajo `MATCH FULL` son todas
+    (ADR-004).
     """
 
     kind: Literal["insert"] = "insert"
     tables: list[str] = Field(description="Tablas a insertar en esta fase, ya en orden válido.")
     null_fks: list[FkRef] = Field(
         default_factory=list,
-        description="FK insertadas a NULL en esta fase para romper un ciclo.",
+        description=(
+            "FK cuyas `null_columns` se insertan a NULL en esta fase para romper "
+            "un ciclo; cada `FkRef` registra QUÉ columnas se anulan, no solo de "
+            "qué FK se trata (ADR-004)."
+        ),
     )
 
 
@@ -103,11 +122,17 @@ class InsertLeveledPhase(IRModel):
 
 
 class UpdatePhase(IRModel):
-    """UPDATE posterior que asigna los valores reales de una FK insertada a NULL."""
+    """UPDATE posterior que asigna los valores reales de las columnas insertadas a NULL."""
 
     kind: Literal["update"] = "update"
     table: str
-    columns: list[str] = Field(description="Columnas de la FK que se actualizan.")
+    columns: list[str] = Field(
+        description=(
+            "Columnas que se insertaron a NULL para romper el ciclo y que ahora "
+            "reciben su valor real; coinciden con las `null_columns` de la "
+            "`InsertPhase` correspondiente (ADR-004)."
+        )
+    )
 
 
 class DeferredPhase(IRModel):
