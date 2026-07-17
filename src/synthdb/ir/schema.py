@@ -92,7 +92,16 @@ class CheckSpec(IRModel):
     columns_involved: list[str] = Field(default_factory=list)
     bounds_derived: dict[str, Any] | None = Field(
         default=None,
-        description="Cotas propagadas al generador, p. ej. {'min': 1900, 'max': 2026}.",
+        description=(
+            "Cotas propagadas al generador (constraints/check_interp.py, T1.4). Solo "
+            "las claves que aplican están presentes: 'min'/'min_exclusive' y "
+            "'max'/'max_exclusive' (siempre en pareja) para cotas de rango; 'equals' "
+            "para un valor fijo (col = literal); 'values' para una lista cerrada "
+            "(IN); 'excluded_values' para valores excluidos (NOT IN, <>). Tipos de "
+            "literal conservados (int, float, str, bool; una fecha llega como str "
+            "ISO). P. ej. {'min': 1900, 'min_exclusive': False, 'max': 2026, "
+            "'max_exclusive': False}."
+        ),
     )
 
 

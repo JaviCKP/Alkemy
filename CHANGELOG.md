@@ -124,6 +124,27 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   Las FK que `ciclos_nullable.sql`/`ciclos_deferrable.sql`/
   `ciclos_unbreakable.sql` declaran vía `ALTER TABLE ... ADD CONSTRAINT`
   aparecen ahora como `RelationshipSpec` en vez de como aviso.
+- T1.4 — `constraints/check_interp.py`: `interpret_checks()` re-parsea
+  `sql_text` de cada `CheckSpec` (de columna y de tabla) con el parser de
+  expresiones de sqlglot — nunca con regex — y, para el subconjunto que
+  reconoce, rellena `ast_supported=True` y `bounds_derived`. Soporta, siempre
+  restringido a un `CheckSpec` de una sola columna (`columns_involved`):
+  comparaciones `col <op> literal` y su forma invertida `literal <op> col`
+  ya normalizada (`>`, `>=`, `<`, `<=`, `=`, `<>`/`!=`), `BETWEEN`, `IN`,
+  `NOT IN`, `NOT` de una comparación o de un `IN`, y `AND` de cualquier
+  combinación de lo anterior intersecando las cotas. Un `AND` cuya
+  intersección resulta vacía (p. ej. `x > 5 AND x < 3`) se queda con
+  `ast_supported=True` — PostgreSQL acepta la restricción igual — pero
+  añade un aviso a `SchemaSpec.warnings`: ninguna fila podrá cumplirla
+  nunca. Fuera de este subconjunto, sin aviso nuevo (estado normal): `OR`,
+  predicados multi-columna (quedan para el mini-DSL de T2.9), funciones,
+  casts, subconsultas y `LIKE` (pospuesto entero; ver docstring del módulo
+  para la justificación). `ir/schema.py`: documentado el formato exacto de
+  `CheckSpec.bounds_derived` (claves `min`/`min_exclusive`, `max`/
+  `max_exclusive`, `equals`, `values`, `excluded_values`, solo las que
+  aplican). Test end-to-end de que `ir/hashing.py` (T1.5) no cambia al
+  interpretar los checks de un esquema, confirmando la exclusión ya
+  existente de `ast_supported`/`bounds_derived` del hash canónico.
 
 ### Fixed
 
