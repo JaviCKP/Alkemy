@@ -8,6 +8,42 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- ADR-004 — lecciones del primer esquema real (inmobiliaria de 20 tablas,
+  PostgreSQL 15; ver `docs/validaciones/`). Descongelación puntual de la IR
+  (ADR-003) para tres construcciones que el esquema real necesita:
+  - **`ON DELETE SET NULL (columna)`** de PostgreSQL 15+. sqlglot 30.12.0 (la
+    última) la rechaza con `Expecting )`; en vez de preprocesar el texto SQL
+    (prohibido por CLAUDE.md) se extiende el dialecto por el mecanismo oficial:
+    `parsing/dialect.py` subclasea `PostgresParser` y consume la lista de
+    columnas desde el AST. Nuevo `RelationshipSpec.on_delete_set_columns`
+    (estructural, con plegado de identificadores; subconjunto de `columns` o
+    aviso).
+  - **Nulabilidad dirigida de FK compuestas.** Nuevo
+    `RelationshipSpec.nullable_columns` (derivado, EXCLUIDO del hash) con el
+    subconjunto anulable de la FK, y `RelationshipSpec.match_full` (estructural)
+    para `MATCH FULL`. `graph/strategies.py` rompe un ciclo bajo `MATCH SIMPLE`
+    anulando SOLO las columnas anulables (p. ej. `entidad_id` de
+    `(inmobiliaria_id, entidad_id)`), y bajo `MATCH FULL` exige que sean todas.
+    `InsertPhase.null_fks`/`UpdatePhase` registran qué columnas se anulan
+    (`FkRef.null_columns`), no solo qué FK. El docstring de `nullable` se amplía
+    para distinguir el AND global de la nulabilidad por columna.
+  - **Arrays** (`text[]`, `numeric(7,2)[]`). Nuevo `TypeSpec.is_array`
+    (estructural); el `kind`/parámetros son los del elemento. Detección desde el
+    AST de sqlglot (`DataType` ARRAY), nunca del texto; `text[][]` se colapsa a
+    una dimensión con aviso. La generación de arrays queda para el Hito 2.
+  - `synthdb analyze` refleja las tres: sufijo `[]` en el tipo, `MATCH FULL` y
+    `ON DELETE set_null (columnas)` en la FK, y las columnas concretas que se
+    anulan en las fases.
+  - Nuevo fixture `tests/schemas/crm_real_minimo.sql` (fixture 11): reproduce en
+    3 tablas el ciclo de FK compuestas con nulabilidad dirigida, la acción
+    `ON DELETE SET NULL (columna)` y una columna `text[]`, sin incluir el
+    esquema real del usuario. Tests nuevos en parser, grafo, hash, tipos y CLI.
+- ADR-004 (cambio, no adición) — añadir los tres campos estructurales
+  (`is_array`, `on_delete_set_columns`, `match_full`) cambia la forma canónica de
+  la IR: **todos los hashes de esquema cambian** y **todos los snapshots golden
+  de IR se regeneraron en este PR** (regeneración en bloque justificada por el
+  ADR, revisada a ojo; no hay cachés en producción que invalidar). El campo
+  derivado `nullable_columns` cambia los snapshots pero no el hash.
 - T1.8 — `cli.py`: nuevo subcomando `synthdb analyze RUTA.sql [--dialect]
   [--json]` (Typer + Rich) que ejecuta el pipeline estructural completo
   (`parse_ddl` → `interpret_checks` → `analyze_structure` → `resolve_cycles`)

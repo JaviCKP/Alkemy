@@ -274,7 +274,13 @@ def _render_warnings(
 
 
 def _format_type(type_spec: TypeSpec, enum_values: list[str] | None) -> str:
-    """Tipo canónico de una columna como texto legible (kind más sus parámetros)."""
+    """Tipo canónico de una columna como texto legible; añade `[]` si es un array."""
+    base = _format_scalar_type(type_spec, enum_values)
+    return f"{base}[]" if type_spec.is_array else base
+
+
+def _format_scalar_type(type_spec: TypeSpec, enum_values: list[str] | None) -> str:
+    """Tipo del elemento como texto legible (kind más sus parámetros), sin la dimensión."""
     kind = type_spec.kind
     if kind == "enum" and enum_values:
         return f"enum({', '.join(enum_values)})"
@@ -297,10 +303,15 @@ def _format_fk(fk: RelationshipSpec) -> str:
     parts = [f"({', '.join(fk.columns)}) → {fk.ref_table}{ref_columns}"]
     if fk.cardinality_hint is not None:
         parts.append(fk.cardinality_hint)
+    if fk.match_full:
+        parts.append("MATCH FULL")
     if fk.deferrable:
         parts.append("DEFERRABLE")
     if fk.on_delete is not None:
-        parts.append(f"ON DELETE {fk.on_delete}")
+        detail = f"ON DELETE {fk.on_delete}"
+        if fk.on_delete_set_columns:
+            detail += f" ({', '.join(fk.on_delete_set_columns)})"
+        parts.append(detail)
     if fk.on_update is not None:
         parts.append(f"ON UPDATE {fk.on_update}")
     return "  ·  ".join(parts)
@@ -320,9 +331,9 @@ def _describe_phase(phase: Phase) -> tuple[str, str]:
         detail = ", ".join(phase.tables)
         if phase.null_fks:
             nulls = "; ".join(
-                f"{fk.table}({', '.join(fk.columns)})→{fk.ref_table}" for fk in phase.null_fks
+                f"{fk.table}({', '.join(fk.null_columns)})→{fk.ref_table}" for fk in phase.null_fks
             )
-            detail += f"  [FK a NULL para romper el ciclo: {nulls}]"
+            detail += f"  [columnas a NULL para romper el ciclo: {nulls}]"
         return label, detail
     if isinstance(phase, InsertLeveledPhase):
         detail = f"{phase.table}  [autoref por niveles: {', '.join(phase.self_fk_columns)}"

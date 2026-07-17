@@ -15,12 +15,16 @@ venv/
 
 # Tests y cobertura
 .pytest_cache/
+.pytest_tmp/
 .mypy_cache/
 .ruff_cache/
 .coverage
 .coverage.*
 htmlcov/
 coverage.xml
+
+# Caché de uv y basetemp de pytest dentro del repo (nota Windows, CONTRIBUTING.md)
+.uv-cache/
 
 # Salidas de generación / ejemplos regenerables
 quarantine/

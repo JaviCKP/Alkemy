@@ -29,6 +29,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -48,6 +49,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -67,6 +69,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -86,6 +89,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -122,6 +126,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -141,6 +146,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'varchar',
               'length': 20,
               'precision': None,
@@ -168,6 +174,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -195,6 +202,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -234,6 +242,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -253,6 +262,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -272,6 +282,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -291,6 +302,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -310,6 +322,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -326,8 +339,13 @@
               'persona_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -340,8 +358,13 @@
               'sepultura_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -387,6 +410,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -406,6 +430,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -425,6 +450,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -441,8 +467,13 @@
               'factura_id',
             ]),
             'deferrable': True,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -475,6 +506,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -494,6 +526,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'varchar',
               'length': 20,
               'precision': None,
@@ -513,6 +546,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -529,8 +563,13 @@
               'pedido_id',
             ]),
             'deferrable': True,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -576,6 +615,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -595,6 +635,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -614,6 +655,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -630,8 +672,14 @@
               'factura_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': True,
+            'nullable_columns': list([
+              'factura_id',
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -664,6 +712,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -683,6 +732,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'varchar',
               'length': 20,
               'precision': None,
@@ -702,6 +752,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -718,8 +769,13 @@
               'pedido_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -765,6 +821,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -784,6 +841,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -803,6 +861,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -819,8 +878,13 @@
               'factura_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -853,6 +917,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -872,6 +937,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'varchar',
               'length': 20,
               'precision': None,
@@ -891,6 +957,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -907,8 +974,13 @@
               'pedido_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -926,6 +998,331 @@
           list([
             'numero',
           ]),
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
+# name: test_crm_real_minimo_fixture_full_parse_golden_snapshot
+  dict({
+    'dialect': 'postgres',
+    'hash': None,
+    'tables': list([
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 64,
+              'is_array': False,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'nombre',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'is_array': False,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+        ]),
+        'kind': 'regular',
+        'name': 'inmobiliarias',
+        'primary_key': list([
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'inmobiliaria_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 64,
+              'is_array': False,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 64,
+              'is_array': False,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'roles',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': None,
+              'is_array': True,
+              'kind': 'text',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'match_id',
+            'nullable': True,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 64,
+              'is_array': False,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'inmobiliaria_id',
+            ]),
+            'deferrable': False,
+            'match_full': False,
+            'nullable': False,
+            'nullable_columns': list([
+            ]),
+            'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'inmobiliarias',
+          }),
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'inmobiliaria_id',
+              'match_id',
+            ]),
+            'deferrable': False,
+            'match_full': False,
+            'nullable': False,
+            'nullable_columns': list([
+              'match_id',
+            ]),
+            'on_delete': 'set_null',
+            'on_delete_set_columns': list([
+              'match_id',
+            ]),
+            'on_update': None,
+            'ref_columns': list([
+              'inmobiliaria_id',
+              'id',
+            ]),
+            'ref_table': 'matches',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'clientes',
+        'primary_key': list([
+          'inmobiliaria_id',
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
+        ]),
+      }),
+      dict({
+        'checks': list([
+        ]),
+        'columns': list([
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'inmobiliaria_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 64,
+              'is_array': False,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 64,
+              'is_array': False,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+          dict({
+            'checks': list([
+            ]),
+            'comment': None,
+            'default': None,
+            'enum_values': None,
+            'generated': False,
+            'name': 'cliente_id',
+            'nullable': False,
+            'type': dict({
+              'autoincrement': False,
+              'bits': 64,
+              'is_array': False,
+              'kind': 'integer',
+              'length': None,
+              'precision': None,
+              'scale': None,
+              'with_timezone': None,
+            }),
+          }),
+        ]),
+        'comment': None,
+        'foreign_keys': list([
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'inmobiliaria_id',
+            ]),
+            'deferrable': False,
+            'match_full': False,
+            'nullable': False,
+            'nullable_columns': list([
+            ]),
+            'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
+            'on_update': None,
+            'ref_columns': list([
+              'id',
+            ]),
+            'ref_table': 'inmobiliarias',
+          }),
+          dict({
+            'cardinality_hint': None,
+            'columns': list([
+              'inmobiliaria_id',
+              'cliente_id',
+            ]),
+            'deferrable': False,
+            'match_full': False,
+            'nullable': False,
+            'nullable_columns': list([
+            ]),
+            'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
+            'on_update': None,
+            'ref_columns': list([
+              'inmobiliaria_id',
+              'id',
+            ]),
+            'ref_table': 'clientes',
+          }),
+        ]),
+        'kind': 'regular',
+        'name': 'matches',
+        'primary_key': list([
+          'inmobiliaria_id',
+          'id',
+        ]),
+        'schema': None,
+        'uniques': list([
         ]),
       }),
     ]),
@@ -954,6 +1351,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -973,6 +1371,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -992,6 +1391,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1011,6 +1411,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -1050,6 +1451,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1069,6 +1471,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1108,6 +1511,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1127,6 +1531,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1146,6 +1551,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1173,6 +1579,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 10,
@@ -1204,6 +1611,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1220,8 +1628,13 @@
               'categoria_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -1254,6 +1667,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1273,6 +1687,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1292,6 +1707,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'timestamp',
               'length': None,
               'precision': None,
@@ -1319,6 +1735,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1346,6 +1763,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 12,
@@ -1362,8 +1780,13 @@
               'cliente_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -1396,6 +1819,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1415,6 +1839,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1434,6 +1859,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1461,6 +1887,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1488,6 +1915,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 10,
@@ -1504,8 +1932,13 @@
               'pedido_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -1518,8 +1951,13 @@
               'producto_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -1566,6 +2004,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1585,6 +2024,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1604,6 +2044,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1623,6 +2064,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -1662,6 +2104,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1681,6 +2124,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1708,6 +2152,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -1735,6 +2180,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 7,
@@ -1762,6 +2208,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1781,6 +2228,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1797,8 +2245,13 @@
               'propietario_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -1831,6 +2284,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1850,6 +2304,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1869,6 +2324,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1888,6 +2344,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -1915,6 +2372,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 12,
@@ -1931,8 +2389,13 @@
               'vivienda_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -1945,8 +2408,13 @@
               'comprador_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -1979,6 +2447,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -1998,6 +2467,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2017,6 +2487,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2036,6 +2507,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -2063,6 +2535,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 12,
@@ -2079,8 +2552,13 @@
               'compraventa_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -2127,6 +2605,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2146,6 +2625,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'varchar',
               'length': 50,
               'precision': None,
@@ -2165,6 +2645,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2184,6 +2665,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 10,
@@ -2203,6 +2685,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'char',
               'length': 2,
               'precision': None,
@@ -2239,6 +2722,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2258,6 +2742,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2277,6 +2762,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -2300,6 +2786,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'boolean',
               'length': None,
               'precision': None,
@@ -2319,6 +2806,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 12,
@@ -2335,8 +2823,13 @@
               'ref_t1',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'c1',
@@ -2379,6 +2872,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2398,6 +2892,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2417,6 +2912,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2436,6 +2932,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -2455,6 +2952,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2471,8 +2969,13 @@
               'manager_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -2515,6 +3018,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2534,6 +3038,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2553,6 +3058,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2572,6 +3078,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -2591,6 +3098,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2607,8 +3115,14 @@
               'manager_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': True,
+            'nullable_columns': list([
+              'manager_id',
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -2651,6 +3165,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2670,6 +3185,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2689,6 +3205,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'varchar',
               'length': 20,
               'precision': None,
@@ -2725,6 +3242,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2744,6 +3262,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2763,6 +3282,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'varchar',
               'length': 10,
               'precision': None,
@@ -2782,6 +3302,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2801,6 +3322,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2828,6 +3350,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2844,8 +3367,13 @@
               'cliente_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -2881,6 +3409,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2900,6 +3429,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -2927,6 +3457,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 10,
@@ -2972,6 +3503,7 @@
             'type': dict({
               'autoincrement': True,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -2991,6 +3523,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -3010,6 +3543,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -3029,6 +3563,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'date',
               'length': None,
               'precision': None,
@@ -3048,6 +3583,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'text',
               'length': None,
               'precision': None,
@@ -3064,8 +3600,13 @@
               'vehiculo_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -3098,6 +3639,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -3117,6 +3659,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -3144,6 +3687,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': 32,
+              'is_array': False,
               'kind': 'integer',
               'length': None,
               'precision': None,
@@ -3171,6 +3715,7 @@
             'type': dict({
               'autoincrement': False,
               'bits': None,
+              'is_array': False,
               'kind': 'numeric',
               'length': None,
               'precision': 10,
@@ -3187,8 +3732,13 @@
               'reparacion_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',
@@ -3201,8 +3751,13 @@
               'pieza_id',
             ]),
             'deferrable': False,
+            'match_full': False,
             'nullable': False,
+            'nullable_columns': list([
+            ]),
             'on_delete': None,
+            'on_delete_set_columns': list([
+            ]),
             'on_update': None,
             'ref_columns': list([
               'id',

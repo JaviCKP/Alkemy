@@ -791,6 +791,204 @@ def test_alter_table_add_column_is_a_warning_not_a_crash() -> None:
     assert any("t" in warning for warning in schema.warnings)
 
 
+# --- Revisión ADR-004: ON DELETE SET NULL (col), MATCH FULL, arrays ----------
+
+
+def test_column_level_on_delete_set_null_with_a_column_list_parses() -> None:
+    # PostgreSQL 15+: la acción SET NULL se acota a columnas concretas. sqlglot
+    # base la rechaza con "Expecting )"; el dialecto extendido la acepta (ADR-004).
+    sql = """
+        CREATE TABLE padres (id INT PRIMARY KEY);
+        CREATE TABLE hijos (
+            id INT PRIMARY KEY,
+            padre_id INT REFERENCES padres(id) ON DELETE SET NULL (padre_id)
+        );
+    """
+
+    fk = _table(parse_ddl(sql), "hijos").foreign_keys[0]
+
+    assert fk.on_delete == "set_null"
+    assert fk.on_delete_set_columns == ["padre_id"]
+
+
+def test_composite_foreign_key_on_delete_set_null_targets_only_one_column() -> None:
+    # El patrón del esquema real: (inmobiliaria_id NOT NULL, entidad_id NULL) con
+    # ON DELETE SET NULL acotado a entidad_id, subconjunto de la FK.
+    sql = """
+        CREATE TABLE entidades (inmobiliaria_id INT, id INT, PRIMARY KEY (inmobiliaria_id, id));
+        CREATE TABLE eventos (
+            inmobiliaria_id INT NOT NULL,
+            entidad_id INT,
+            id INT,
+            PRIMARY KEY (inmobiliaria_id, id),
+            FOREIGN KEY (inmobiliaria_id, entidad_id) REFERENCES entidades (inmobiliaria_id, id)
+                ON DELETE SET NULL (entidad_id)
+        );
+    """
+
+    fk = _table(parse_ddl(sql), "eventos").foreign_keys[0]
+
+    assert fk.columns == ["inmobiliaria_id", "entidad_id"]
+    assert fk.on_delete == "set_null"
+    assert fk.on_delete_set_columns == ["entidad_id"]
+
+
+def test_named_composite_constraint_with_lowercase_on_delete_set_null_column() -> None:
+    # El esquema real usa palabras clave en minúsculas y restricciones CON
+    # nombre; sqlglot conserva la grafía original de DELETE, así que el dialecto
+    # debe normalizar antes de reconocer la lista de columnas (ADR-004).
+    sql = """
+        CREATE TABLE usuarios (
+            inmobiliaria_id INT NOT NULL,
+            id INT,
+            PRIMARY KEY (inmobiliaria_id, id)
+        );
+        CREATE TABLE clientes (
+            inmobiliaria_id INT NOT NULL,
+            assigned_user_id INT,
+            id INT,
+            PRIMARY KEY (inmobiliaria_id, id),
+            CONSTRAINT fk_clientes_assigned_user
+                FOREIGN KEY (inmobiliaria_id, assigned_user_id)
+                REFERENCES usuarios (inmobiliaria_id, id)
+                on delete set null (assigned_user_id)
+        );
+    """
+
+    fk = next(
+        f for f in _table(parse_ddl(sql), "clientes").foreign_keys if f.ref_table == "usuarios"
+    )
+
+    assert fk.on_delete == "set_null"
+    assert fk.on_delete_set_columns == ["assigned_user_id"]
+    assert fk.nullable_columns == ["assigned_user_id"]
+
+
+def test_on_delete_set_null_column_folds_identifier_case() -> None:
+    # Los identificadores de la lista se pliegan como cualquier otro en
+    # PostgreSQL (sin comillas ⇒ minúsculas), igual que las columnas de la FK.
+    sql = """
+        CREATE TABLE padres (id INT PRIMARY KEY);
+        CREATE TABLE hijos (
+            id INT PRIMARY KEY,
+            Padre_Id INT REFERENCES padres(id) ON DELETE SET NULL (Padre_Id)
+        );
+    """
+
+    fk = _table(parse_ddl(sql), "hijos").foreign_keys[0]
+
+    assert fk.on_delete_set_columns == ["padre_id"]
+
+
+def test_on_delete_set_null_column_outside_the_fk_is_a_warning() -> None:
+    # Una columna de la lista ajena a la FK se conserva pero se avisa
+    # (CLAUDE.md: nada en silencio).
+    sql = """
+        CREATE TABLE padres (id INT PRIMARY KEY);
+        CREATE TABLE hijos (
+            id INT PRIMARY KEY,
+            padre_id INT,
+            otra INT,
+            FOREIGN KEY (padre_id) REFERENCES padres(id) ON DELETE SET NULL (otra)
+        );
+    """
+
+    schema = parse_ddl(sql)
+
+    fk = _table(schema, "hijos").foreign_keys[0]
+    assert fk.on_delete_set_columns == ["otra"]
+    assert any("ajenas a la FK" in warning and "otra" in warning for warning in schema.warnings)
+
+
+def test_match_full_is_captured_on_a_composite_foreign_key() -> None:
+    sql = """
+        CREATE TABLE entidades (a INT, b INT, PRIMARY KEY (a, b));
+        CREATE TABLE eventos (
+            a INT NOT NULL,
+            b INT NOT NULL,
+            FOREIGN KEY (a, b) REFERENCES entidades (a, b) MATCH FULL
+        );
+    """
+
+    fk = _table(parse_ddl(sql), "eventos").foreign_keys[0]
+
+    assert fk.match_full is True
+
+
+def test_match_simple_default_leaves_match_full_false() -> None:
+    sql = """
+        CREATE TABLE entidades (a INT, b INT, PRIMARY KEY (a, b));
+        CREATE TABLE eventos (
+            a INT NOT NULL,
+            b INT,
+            FOREIGN KEY (a, b) REFERENCES entidades (a, b)
+        );
+    """
+
+    fk = _table(parse_ddl(sql), "eventos").foreign_keys[0]
+
+    assert fk.match_full is False
+
+
+def test_nullable_columns_isolate_the_nullable_subset_of_a_mixed_composite_fk() -> None:
+    # `nullable` (AND global) es False porque inmobiliaria_id es NOT NULL, pero
+    # `nullable_columns` aísla la columna que sí admite NULL (ADR-004).
+    sql = """
+        CREATE TABLE entidades (inmobiliaria_id INT, id INT, PRIMARY KEY (inmobiliaria_id, id));
+        CREATE TABLE eventos (
+            inmobiliaria_id INT NOT NULL,
+            entidad_id INT,
+            id INT,
+            PRIMARY KEY (inmobiliaria_id, id),
+            FOREIGN KEY (inmobiliaria_id, entidad_id) REFERENCES entidades (inmobiliaria_id, id)
+        );
+    """
+
+    fk = _table(parse_ddl(sql), "eventos").foreign_keys[0]
+
+    assert fk.nullable is False
+    assert fk.nullable_columns == ["entidad_id"]
+
+
+def test_text_array_column_keeps_element_kind_and_marks_is_array() -> None:
+    sql = "CREATE TABLE t (id INT PRIMARY KEY, roles TEXT[]);"
+
+    roles = _table(parse_ddl(sql), "t").columns[1]
+
+    assert roles.type.kind == "text"
+    assert roles.type.is_array is True
+
+
+def test_numeric_array_column_preserves_precision_and_scale() -> None:
+    sql = "CREATE TABLE t (id INT PRIMARY KEY, precios NUMERIC(7, 2)[]);"
+
+    precios = _table(parse_ddl(sql), "t").columns[1]
+
+    assert precios.type.kind == "numeric"
+    assert precios.type.is_array is True
+    assert precios.type.precision == 7
+    assert precios.type.scale == 2
+
+
+def test_multidimensional_array_collapses_to_one_dimension_with_a_warning() -> None:
+    sql = "CREATE TABLE t (id INT PRIMARY KEY, matriz TEXT[][]);"
+
+    schema = parse_ddl(sql)
+
+    matriz = _table(schema, "t").columns[1]
+    assert matriz.type.kind == "text"
+    assert matriz.type.is_array is True
+    assert any("multidimensional" in warning for warning in schema.warnings)
+
+
+def test_non_array_column_has_is_array_false() -> None:
+    sql = "CREATE TABLE t (id INT PRIMARY KEY, nombre TEXT);"
+
+    nombre = _table(parse_ddl(sql), "t").columns[1]
+
+    assert nombre.type.is_array is False
+
+
 # --- Entrega 3/3: snapshots golden de los 7 fixtures (T1.3, criterio de -----
 # --- aceptación, plan-ejecucion-mvp.md §3) -----------------------------------
 
@@ -904,4 +1102,20 @@ def test_opaco_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -
     schema = parse_ddl(sql)
 
     assert schema.warnings == []
+    assert schema.model_dump(mode="json", by_alias=True) == snapshot
+
+
+def test_crm_real_minimo_fixture_full_parse_golden_snapshot(snapshot: SnapshotAssertion) -> None:
+    """Fixture 11 (ADR-004): FK compuestas con nulabilidad dirigida, ON DELETE
+    SET NULL (columna) y una columna text[], reproducidas del primer esquema real."""
+    sql = (_SCHEMAS_DIR / "crm_real_minimo.sql").read_text(encoding="utf-8")
+
+    schema = parse_ddl(sql)
+
+    assert schema.warnings == []
+    clientes = _table(schema, "clientes")
+    fk_matches = next(fk for fk in clientes.foreign_keys if fk.ref_table == "matches")
+    assert fk_matches.on_delete_set_columns == ["match_id"]
+    assert fk_matches.nullable_columns == ["match_id"]
+    assert clientes.columns[2].type.is_array is True  # roles TEXT[]
     assert schema.model_dump(mode="json", by_alias=True) == snapshot

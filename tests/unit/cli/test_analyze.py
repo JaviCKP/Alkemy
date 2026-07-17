@@ -45,15 +45,16 @@ def _fixture(name: str) -> str:
     return str(_SCHEMAS_DIR / f"{name}.sql")
 
 
-def test_there_are_exactly_ten_fixtures() -> None:
-    # Guarda de que el parametrizado de abajo cubre de verdad LOS 10 fixtures
-    # y no un subconjunto por un glob que se quedó corto.
-    assert len(_FIXTURES) == 10
+def test_there_are_exactly_eleven_fixtures() -> None:
+    # Guarda de que el parametrizado de abajo cubre de verdad LOS 11 fixtures
+    # y no un subconjunto por un glob que se quedó corto. El 11º, crm_real_minimo,
+    # llegó con ADR-004 (patrones del primer esquema real).
+    assert len(_FIXTURES) == 11
 
 
 @pytest.mark.parametrize("fixture", _FIXTURES)
 def test_analyze_over_every_fixture_exits_with_its_code(fixture: str) -> None:
-    # analyze sobre los 10 fixtures: 9 terminan el pipeline (exit 0) y
+    # analyze sobre los 11 fixtures: 10 terminan el pipeline (exit 0) y
     # ciclos_unbreakable se detiene con diagnóstico (exit 2).
     result = _analyze(_fixture(fixture))
     expected = 2 if fixture == _UNBREAKABLE else 0
@@ -130,6 +131,20 @@ def test_human_output_shows_phases_and_check_bounds() -> None:
     # CHECK (anio_construccion BETWEEN 1900 AND 2026) interpretado a cotas
     assert "1900" in out
     assert "2026" in out
+
+
+def test_human_output_shows_arrays_and_directed_set_null_columns() -> None:
+    # crm_real_minimo (ADR-004) ejercita las tres novedades en la salida Rich:
+    # una columna text[] (roles), ON DELETE SET NULL acotado a una columna
+    # (match_id) y la rotura del ciclo anulando SOLO esa columna.
+    result = _analyze(_fixture("crm_real_minimo"))
+
+    assert result.exit_code == 0
+    out = result.output
+    assert "text[]" in out  # el array se representa con su sufijo
+    assert "set_null (match_id)" in out  # la acción dirigida a una columna
+    assert "Update" in out  # el ciclo se rompe (Insert + Update), no es irrompible
+    assert "Sin avisos" in out  # y no hay avisos estructurales
 
 
 def test_json_output_is_parseable_and_has_expected_keys() -> None:

@@ -40,7 +40,9 @@ _EXCLUDED_FIELDS: dict[str, Any] = {
             "kind": True,
             "foreign_keys": {
                 # RelationshipSpec.cardinality_hint: derivado por el planificador.
-                "__all__": {"cardinality_hint": True}
+                # RelationshipSpec.nullable_columns: derivado de la nulabilidad
+                # de cada columna, ya presente en la IR (ADR-004).
+                "__all__": {"cardinality_hint": True, "nullable_columns": True}
             },
             "checks": {
                 # CheckSpec.ast_supported/bounds_derived: derivados por

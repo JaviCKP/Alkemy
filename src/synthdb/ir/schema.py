@@ -70,6 +70,19 @@ class TypeSpec(IRModel):
     autoincrement: bool = Field(
         default=False, description="`True` para `serial`/`bigserial`/`smallserial`."
     )
+    is_array: bool = Field(
+        default=False,
+        description=(
+            "`True` si la columna es un array de PostgreSQL (`text[]`, "
+            "`numeric(7,2)[]`). El resto de campos describen el tipo del "
+            "ELEMENTO, no del array: `text[]` ⇒ `kind='text', is_array=True`; "
+            "`numeric(7,2)[]` conserva `precision=7, scale=2`. Un array "
+            "multidimensional (`text[][]`) se representa como una sola "
+            "dimensión con un aviso, igual que hace PostgreSQL en la práctica "
+            "(ADR-004). La generación de valores de array es del Hito 2; aquí "
+            "solo se representa."
+        ),
+    )
 
 
 class DefaultSpec(IRModel):
@@ -130,9 +143,50 @@ class RelationshipSpec(IRModel):
     ref_columns: list[str]
     on_delete: ReferentialAction | None = None
     on_update: ReferentialAction | None = None
+    on_delete_set_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Columnas de la lista de `ON DELETE SET NULL (…)`/`SET DEFAULT (…)` "
+            "de PostgreSQL 15+, con el plegado de identificadores aplicado. "
+            "Debe ser un subconjunto de `columns`; si el DDL declara una columna "
+            "ajena a la FK se conserva igualmente y se emite un aviso "
+            "(CLAUDE.md: nada en silencio). Solo tiene sentido con "
+            "`on_delete ∈ {set_null, set_default}`, invariante garantizada por "
+            "el parser (la lista solo aparece tras esas acciones). Estructural: "
+            "entra en el hash canónico (ADR-004)."
+        ),
+    )
     deferrable: bool = False
+    match_full: bool = Field(
+        default=False,
+        description=(
+            "`True` si la FK declara `MATCH FULL`: un NULL parcial en una FK "
+            "compuesta la viola, así que romper un ciclo por NULL exige anular "
+            "TODAS sus columnas. `MATCH SIMPLE` (defecto) y `MATCH PARTIAL` "
+            "dejan el campo en `False`. Estructural: entra en el hash (ADR-004)."
+        ),
+    )
     nullable: bool = Field(
-        description="`True` solo si TODAS las columnas locales de la FK admiten NULL."
+        description=(
+            "`True` solo si TODAS las columnas locales de la FK admiten NULL "
+            "(el AND global de su nulabilidad): la FK entera puede quedar sin "
+            "rellenar. NO cuenta la historia completa de la rotura de ciclos: "
+            "bajo `MATCH SIMPLE` basta con anular ALGUNAS columnas de una FK "
+            "compuesta, cosa que este booleano no distingue. Para ese caso está "
+            "`nullable_columns` (ADR-004)."
+        ),
+    )
+    nullable_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Derivado: subconjunto de `columns` que admite NULL, en orden de "
+            "declaración. Bajo `MATCH SIMPLE` (defecto) basta con que no esté "
+            "vacío para romper un ciclo anulando SOLO esas columnas "
+            "(`graph/strategies.py`); bajo `MATCH FULL` se exige que sean todas. "
+            "Excluido del hash (`ir/hashing.py`, ADR-004): se deriva de la "
+            "nulabilidad de cada columna, que ya está en la IR, igual que "
+            "`cardinality_hint` o `TableSpec.kind`."
+        ),
     )
     cardinality_hint: CardinalityHint | None = Field(
         default=None,
