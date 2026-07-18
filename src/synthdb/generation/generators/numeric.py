@@ -10,11 +10,17 @@ from __future__ import annotations
 
 import bisect
 import math
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import Field, model_validator
 
 from synthdb.generation.generators.base import GenContext, GeneratorParams, register
+from synthdb.generation.generators.distributions import (
+    DistributionSpec,
+    LognormalParams,
+    NormalParams,
+    ZipfParams,
+)
 
 _INT_BITS_BOUNDS: dict[int, tuple[int, int]] = {
     16: (-(2**15), 2**15 - 1),
@@ -41,20 +47,17 @@ class NumericRangeParams(GeneratorParams):
     `min`/`max` son las cotas del rango; si faltan, para una columna entera se
     usan los bits del tipo como cota implícita, y para una numérica el rango
     `[0, 1]`. `round_to` es el *paso* de redondeo (1 ⇒ entero, 0.01 ⇒ dos
-    decimales). Cada familia de distribución usa sus propios campos opcionales;
-    los que sobran para la familia elegida simplemente se ignoran.
+    decimales). `distribution` es la forma anidada `{family, params}`
+    (`DistributionSpec`): los parámetros de cada familia se validan contra su
+    propio modelo, y un campo ajeno a la familia es un error de campo exacto, no
+    se ignora.
     """
 
     min: float | None = None
     max: float | None = None
     min_exclusive: bool = False
     max_exclusive: bool = False
-    distribution: Literal["uniform", "normal", "lognormal", "zipf"] = "uniform"
-    mean: float | None = Field(default=None, description="Normal: centro (def: punto medio).")
-    std: float | None = Field(default=None, description="Normal: desviación (def: rango/6).")
-    median: float | None = Field(default=None, description="Lognormal: mediana (def: punto medio).")
-    sigma: float | None = Field(default=None, description="Lognormal: sigma log (def: 0.5).")
-    s: float = Field(default=1.2, description="Zipf: exponente; mayor ⇒ más sesgo hacia el mínimo.")
+    distribution: DistributionSpec = Field(default_factory=DistributionSpec)
     round_to: float | None = Field(default=None, description="Paso de redondeo (1 = entero).")
 
     @model_validator(mode="after")
@@ -63,14 +66,6 @@ class NumericRangeParams(GeneratorParams):
             raise ValueError("numeric_range: 'min' no puede ser mayor que 'max'.")
         if self.round_to is not None and self.round_to <= 0:
             raise ValueError("numeric_range: 'round_to' debe ser > 0.")
-        if self.s <= 0:
-            raise ValueError("numeric_range: el exponente zipf 's' debe ser > 0.")
-        if self.std is not None and self.std < 0:
-            raise ValueError("numeric_range: 'std' no puede ser negativa.")
-        if self.sigma is not None and self.sigma <= 0:
-            raise ValueError("numeric_range: 'sigma' debe ser > 0.")
-        if self.median is not None and self.median <= 0:
-            raise ValueError("numeric_range: 'median' debe ser > 0 (lognormal).")
         return self
 
 
@@ -139,18 +134,18 @@ class NumericRangeGenerator:
     def _sample(self, ctx: GenContext, lo: float, hi: float) -> float:
         if hi <= lo:
             return lo
-        dist = self._p.distribution
-        if dist == "uniform":
-            return ctx.rng.uniform(lo, hi)
-        if dist == "normal":
-            return self._sample_normal(ctx, lo, hi)
-        if dist == "lognormal":
-            return self._sample_lognormal(ctx, lo, hi)
-        return float(self._sample_zipf(ctx, lo, hi))
+        params = self._p.distribution.params
+        if isinstance(params, NormalParams):
+            return self._sample_normal(ctx, lo, hi, params)
+        if isinstance(params, LognormalParams):
+            return self._sample_lognormal(ctx, lo, hi, params)
+        if isinstance(params, ZipfParams):
+            return float(self._sample_zipf(ctx, lo, hi, params))
+        return ctx.rng.uniform(lo, hi)  # UniformParams
 
-    def _sample_normal(self, ctx: GenContext, lo: float, hi: float) -> float:
-        mean = self._p.mean if self._p.mean is not None else (lo + hi) / 2
-        std = self._p.std if self._p.std is not None else (hi - lo) / 6
+    def _sample_normal(self, ctx: GenContext, lo: float, hi: float, p: NormalParams) -> float:
+        mean = p.mean if p.mean is not None else (lo + hi) / 2
+        std = p.std if p.std is not None else (hi - lo) / 6
         if std <= 0:
             return mean
         for _ in range(_BOUNDED_SAMPLE_TRIES):
@@ -159,34 +154,34 @@ class NumericRangeGenerator:
                 return x
         return max(lo, min(hi, ctx.rng.gauss(mean, std)))
 
-    def _sample_lognormal(self, ctx: GenContext, lo: float, hi: float) -> float:
-        median = self._p.median if self._p.median is not None else max((lo + hi) / 2, 1.0)
+    def _sample_lognormal(self, ctx: GenContext, lo: float, hi: float, p: LognormalParams) -> float:
+        median = p.median if p.median is not None else max((lo + hi) / 2, 1.0)
         if median <= 0:
             median = max(hi, 1.0)
         mu = math.log(median)
-        sigma = self._p.sigma if self._p.sigma is not None else 0.5
+        sigma = p.sigma if p.sigma is not None else 0.5
         for _ in range(_BOUNDED_SAMPLE_TRIES):
             x = ctx.rng.lognormvariate(mu, sigma)
             if lo <= x <= hi:
                 return x
         return max(lo, min(hi, ctx.rng.lognormvariate(mu, sigma)))
 
-    def _sample_zipf(self, ctx: GenContext, lo: float, hi: float) -> int:
+    def _sample_zipf(self, ctx: GenContext, lo: float, hi: float, p: ZipfParams) -> int:
         lo_i, hi_i = math.ceil(lo), math.floor(hi)
         if hi_i <= lo_i:
             return lo_i
         key = (lo_i, hi_i)
         cdf = self._zipf_cdf
         if self._zipf_key != key or cdf is None:
-            cdf = self._build_zipf_cdf(lo_i, hi_i)
+            cdf = self._build_zipf_cdf(lo_i, hi_i, p.s)
             self._zipf_cdf = cdf
             self._zipf_key = key
         idx = min(bisect.bisect_left(cdf, ctx.rng.random()), len(cdf) - 1)
         return lo_i + idx
 
-    def _build_zipf_cdf(self, lo_i: int, hi_i: int) -> list[float]:
+    def _build_zipf_cdf(self, lo_i: int, hi_i: int, s: float) -> list[float]:
         n = min(hi_i - lo_i + 1, _ZIPF_MAX_RANKS)
-        weights = [1.0 / (k**self._p.s) for k in range(1, n + 1)]
+        weights = [1.0 / (k**s) for k in range(1, n + 1)]
         total = math.fsum(weights)
         acc = 0.0
         cdf: list[float] = []

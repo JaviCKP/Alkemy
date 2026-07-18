@@ -32,9 +32,12 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     ignora esta sesión (la envoltura de arrays es del motor, sesión E).
   - **Catálogo básico (T2.3), `generation/generators/`.** `faker` (una instancia de
     Faker por locale —`es_ES` por defecto—, resembrada por fila desde el RNG, sin
-    `faker.unique`), `numeric_range` (uniform/normal/lognormal/zipf con solo `random`
-    estándar; respeta min/max con exclusividades, `round_to`, y para enteros los
-    bits del `TypeSpec` como cota implícita), `sequence` (arranque+paso),
+    `faker.unique`), `numeric_range` (distribución en la forma anidada canónica
+    `{family, params}` mediante un `DistributionSpec` reutilizable —familias
+    uniform/normal/lognormal/zipf, parámetros validados por familia con error de
+    campo exacto, solo `random` estándar—; respeta min/max con exclusividades,
+    `round_to`, y para enteros los bits del `TypeSpec` como cota implícita),
+    `sequence` (arranque+paso),
     `datetime_range` (date y timestamp, con zona si el tipo la declara; rango por
     defecto una década FIJA, sin `datetime.now()`), `choice` (pesos), `template`
     (`{tabla}_{columna}_{n}`), `uuid` (v4 derivado del RNG, determinista) y
