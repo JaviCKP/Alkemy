@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from synthdb.ir.schema import IRModel
+from synthdb.ir.schema import GeneratorSpec, IRModel
 
 
 class FkRef(IRModel):
@@ -144,3 +144,74 @@ class DeferredPhase(IRModel):
 
 Phase = InsertPhase | InsertLeveledPhase | UpdatePhase | DeferredPhase
 """Paso concreto de un `PopulationPlan` (especificacion.md §6.2-6.3)."""
+
+
+PlanSource = Literal["user", "ir", "llm", "heuristic", "fallback"]
+"""Origen de la decisión del fusor para una columna (especificacion.md §7.1).
+
+El orden de la unión refleja la prioridad decreciente: la configuración del
+usuario manda sobre la IR, la IR sobre el LLM (con confianza *efectiva*,
+ADR-002), el LLM sobre las heurísticas, y el fallback seguro cierra la lista.
+`"llm"` se reserva aquí pero no lo produce todavía ningún camino: la capa
+semántica del modelo entra en el fusor en el Hito 3 (T3.7); en el H2 el plan
+solo puede llevar `"user"`, `"ir"`, `"heuristic"` o `"fallback"`.
+"""
+
+
+class ColumnPlan(IRModel):
+    """Decisión del fusor para una columna: qué generador, de dónde y con qué confianza.
+
+    Salida de `semantic/merge.py::build_plan` (T2.6). Cada columna del esquema
+    produce exactamente un `ColumnPlan`, con la trazabilidad que exige la
+    especificación (§7.1): `source` y `confidence` dicen *por qué* se eligió ese
+    generador, y `warnings` recoge todo lo que el usuario debería revisar sin que
+    nada quede en silencio (CLAUDE.md).
+    """
+
+    column: str
+    generator: GeneratorSpec | None = Field(
+        default=None,
+        description=(
+            "Generador resuelto para la columna, o `None` cuando la base de datos "
+            "asigna el valor y la columna se excluye de los INSERT: columnas "
+            "`autoincrement` (SERIAL) y `GENERATED ALWAYS AS`. En ese caso "
+            "`source='ir'` (la exclusión la dicta la IR, no una inferencia)."
+        ),
+    )
+    source: PlanSource
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Confianza de la fuente ganadora. `1.0` para usuario e IR (decisiones "
+            "duras), la confianza del patrón para heurística, `0.0` para fallback "
+            "(no hay señal semántica, solo validez estructural)."
+        ),
+    )
+    role: str | None = Field(
+        default=None,
+        description="Rol semántico inferido (heurística) para trazabilidad; `None` si no lo hay.",
+    )
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TablePlan(IRModel):
+    """Plan de generación de una tabla: un `ColumnPlan` por columna, en orden de la IR."""
+
+    table: str
+    columns: list[ColumnPlan]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TablePlans(IRModel):
+    """Planes de todas las tablas del esquema, en el orden de la IR.
+
+    Salida completa de `build_plan`. No decide todavía cantidades de filas ni
+    estrategias de FK (eso vive en el `PopulationPlan` y en el selector de la
+    sesión C): es la asignación columna→generador ya fusionada y auditada, lista
+    para que el motor la consuma. Determinista: mismo `spec` + misma `Config` ⇒
+    mismos bytes vía `canonical_json` (CLAUDE.md).
+    """
+
+    tables: list[TablePlan]
+    warnings: list[str] = Field(default_factory=list)

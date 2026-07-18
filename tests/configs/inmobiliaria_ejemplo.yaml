@@ -1,0 +1,57 @@
+# Ejemplo de configuración de especificacion.md §11 (dominio inmobiliaria).
+# Fixture compartido por los tests de config (T2.5) y del fusor (T2.6): es el
+# YAML que el criterio de aceptación de la sesión exige que cargue completo y
+# que produzca un plan golden sobre tests/schemas/inmobiliaria.sql.
+version: 1
+seed: 42
+locale: es_ES
+dialect: postgres
+
+llm:
+  enabled: true
+  provider: ollama
+  model: qwen2.5:7b-instruct
+  base_url: http://localhost:11434
+  min_confidence: 0.7
+  allow_data_sampling: false
+
+defaults:
+  rows: 100
+  null_ratio: 0.0
+
+tables:
+  clientes:
+    rows: 500
+  viviendas:
+    rows: 800
+    columns:
+      superficie_m2:
+        generator: numeric_range
+        params: {min: 35, max: 450, distribution: {family: lognormal, params: {median: 90, sigma: 0.45}}}
+      direccion:
+        generator: faker
+        params: {provider: street_address}
+  compraventas:
+    rows: 300
+    fk:
+      vivienda_id: {strategy: quota, min: 0, max: 2}
+      comprador_id: {strategy: zipf, s: 1.3}
+    rules:
+      - "fecha >= date(parent(vivienda_id).anio_construccion, 1, 1)"
+      - "precio = superficie_from_parent(vivienda_id) * ref('precio_m2_base') * noise(0.2)"
+  pagos:
+    fk:
+      compraventa_id: {strategy: quota, min: 1, max: 12}
+    rules:
+      - "sum_over_group(importe, compraventa_id) ~= parent(compraventa_id).precio +- 0.01"
+
+refs:
+  precio_m2_base: 2350
+
+hierarchy:
+  empleados.manager_id: {branching: 6, max_depth: 4}
+
+output:
+  batch_size: 5000
+  on_error: quarantine
+  max_repair_retries: 3

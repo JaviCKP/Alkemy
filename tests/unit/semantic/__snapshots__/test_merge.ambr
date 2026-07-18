@@ -1,0 +1,355 @@
+# serializer version: 1
+# name: test_inmobiliaria_plan_golden
+  dict({
+    'tables': list([
+      dict({
+        'columns': list([
+          dict({
+            'column': 'id',
+            'confidence': 1.0,
+            'generator': None,
+            'role': 'identificador',
+            'source': 'ir',
+            'warnings': list([
+              'autoincremental (SERIAL): la base de datos asigna el valor; se excluye de la generación y de los INSERT.',
+            ]),
+          }),
+          dict({
+            'column': 'nombre',
+            'confidence': 0.7,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'provider': 'name',
+              }),
+              'type': 'faker',
+              'unique': False,
+            }),
+            'role': 'nombre_persona',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'email',
+            'confidence': 0.95,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'provider': 'email',
+              }),
+              'type': 'faker',
+              'unique': True,
+            }),
+            'role': 'email',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'fecha_alta',
+            'confidence': 0.8,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'max': '2025-01-01',
+                'min': '2015-01-01',
+              }),
+              'type': 'datetime_range',
+              'unique': False,
+            }),
+            'role': 'fecha_alta',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+        ]),
+        'table': 'clientes',
+        'warnings': list([
+        ]),
+      }),
+      dict({
+        'columns': list([
+          dict({
+            'column': 'id',
+            'confidence': 1.0,
+            'generator': None,
+            'role': 'identificador',
+            'source': 'ir',
+            'warnings': list([
+              'autoincremental (SERIAL): la base de datos asigna el valor; se excluye de la generación y de los INSERT.',
+            ]),
+          }),
+          dict({
+            'column': 'direccion',
+            'confidence': 1.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'provider': 'street_address',
+              }),
+              'type': 'faker',
+              'unique': False,
+            }),
+            'role': None,
+            'source': 'user',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'tipo',
+            'confidence': 1.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'values': list([
+                  'piso',
+                  'chalet',
+                  'adosado',
+                ]),
+              }),
+              'type': 'choice',
+              'unique': False,
+            }),
+            'role': 'enum',
+            'source': 'ir',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'superficie_m2',
+            'confidence': 1.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'distribution': dict({
+                  'family': 'lognormal',
+                  'params': dict({
+                    'median': 90,
+                    'sigma': 0.45,
+                  }),
+                }),
+                'max': 450,
+                'min': 35,
+              }),
+              'type': 'numeric_range',
+              'unique': False,
+            }),
+            'role': None,
+            'source': 'user',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'anio_construccion',
+            'confidence': 0.8,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'max': 2026,
+                'min': 1900,
+              }),
+              'type': 'numeric_range',
+              'unique': False,
+            }),
+            'role': 'anio',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'propietario_id',
+            'confidence': 0.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+              }),
+              'type': 'fallback',
+              'unique': False,
+            }),
+            'role': 'fk',
+            'source': 'fallback',
+            'warnings': list([
+              "viviendas.propietario_id: ninguna fuente semántica supera el umbral (min_confidence=0.7); se usa el generador 'fallback' seguro por tipo. Revisa el plan o fija un generador en el YAML si necesitas datos con dominio.",
+              'viviendas.propietario_id: forma parte de una clave foránea (→ clientes(id)); el selector de claves foráneas es de la sesión C (T2.8). El generador asignado aquí es provisional y no garantiza referencias válidas.',
+            ]),
+          }),
+        ]),
+        'table': 'viviendas',
+        'warnings': list([
+        ]),
+      }),
+      dict({
+        'columns': list([
+          dict({
+            'column': 'id',
+            'confidence': 1.0,
+            'generator': None,
+            'role': 'identificador',
+            'source': 'ir',
+            'warnings': list([
+              'autoincremental (SERIAL): la base de datos asigna el valor; se excluye de la generación y de los INSERT.',
+            ]),
+          }),
+          dict({
+            'column': 'vivienda_id',
+            'confidence': 0.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+              }),
+              'type': 'fallback',
+              'unique': False,
+            }),
+            'role': 'fk',
+            'source': 'fallback',
+            'warnings': list([
+              "compraventas.vivienda_id: ninguna fuente semántica supera el umbral (min_confidence=0.7); se usa el generador 'fallback' seguro por tipo. Revisa el plan o fija un generador en el YAML si necesitas datos con dominio.",
+              'compraventas.vivienda_id: forma parte de una clave foránea (→ viviendas(id)); el selector de claves foráneas es de la sesión C (T2.8). El generador asignado aquí es provisional y no garantiza referencias válidas.',
+            ]),
+          }),
+          dict({
+            'column': 'comprador_id',
+            'confidence': 0.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+              }),
+              'type': 'fallback',
+              'unique': False,
+            }),
+            'role': 'fk',
+            'source': 'fallback',
+            'warnings': list([
+              "compraventas.comprador_id: ninguna fuente semántica supera el umbral (min_confidence=0.7); se usa el generador 'fallback' seguro por tipo. Revisa el plan o fija un generador en el YAML si necesitas datos con dominio.",
+              'compraventas.comprador_id: forma parte de una clave foránea (→ clientes(id)); el selector de claves foráneas es de la sesión C (T2.8). El generador asignado aquí es provisional y no garantiza referencias válidas.',
+            ]),
+          }),
+          dict({
+            'column': 'fecha',
+            'confidence': 0.7,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+              }),
+              'type': 'datetime_range',
+              'unique': False,
+            }),
+            'role': 'fecha',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'precio',
+            'confidence': 0.75,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'max': 1000000,
+                'min': 0,
+                'min_exclusive': True,
+                'round_to': 0.01,
+              }),
+              'type': 'numeric_range',
+              'unique': False,
+            }),
+            'role': 'precio',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+        ]),
+        'table': 'compraventas',
+        'warnings': list([
+        ]),
+      }),
+      dict({
+        'columns': list([
+          dict({
+            'column': 'id',
+            'confidence': 1.0,
+            'generator': None,
+            'role': 'identificador',
+            'source': 'ir',
+            'warnings': list([
+              'autoincremental (SERIAL): la base de datos asigna el valor; se excluye de la generación y de los INSERT.',
+            ]),
+          }),
+          dict({
+            'column': 'compraventa_id',
+            'confidence': 0.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+              }),
+              'type': 'fallback',
+              'unique': False,
+            }),
+            'role': 'fk',
+            'source': 'fallback',
+            'warnings': list([
+              "pagos.compraventa_id: ninguna fuente semántica supera el umbral (min_confidence=0.7); se usa el generador 'fallback' seguro por tipo. Revisa el plan o fija un generador en el YAML si necesitas datos con dominio.",
+              'pagos.compraventa_id: forma parte de una clave foránea (→ compraventas(id)); el selector de claves foráneas es de la sesión C (T2.8). El generador asignado aquí es provisional y no garantiza referencias válidas.',
+            ]),
+          }),
+          dict({
+            'column': 'num_plazo',
+            'confidence': 0.0,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+              }),
+              'type': 'fallback',
+              'unique': False,
+            }),
+            'role': None,
+            'source': 'fallback',
+            'warnings': list([
+              "pagos.num_plazo: ninguna fuente semántica supera el umbral (min_confidence=0.7); se usa el generador 'fallback' seguro por tipo. Revisa el plan o fija un generador en el YAML si necesitas datos con dominio.",
+            ]),
+          }),
+          dict({
+            'column': 'fecha',
+            'confidence': 0.7,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+              }),
+              'type': 'datetime_range',
+              'unique': False,
+            }),
+            'role': 'fecha',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+          dict({
+            'column': 'importe',
+            'confidence': 0.75,
+            'generator': dict({
+              'null_ratio': 0.0,
+              'params': dict({
+                'max': 1000000,
+                'min': 0,
+                'min_exclusive': True,
+                'round_to': 0.01,
+              }),
+              'type': 'numeric_range',
+              'unique': False,
+            }),
+            'role': 'importe',
+            'source': 'heuristic',
+            'warnings': list([
+            ]),
+          }),
+        ]),
+        'table': 'pagos',
+        'warnings': list([
+        ]),
+      }),
+    ]),
+    'warnings': list([
+    ]),
+  })
+# ---
