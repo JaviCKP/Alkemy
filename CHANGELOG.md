@@ -8,6 +8,41 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- T2.1+T2.2+T2.3 (#29) — cimientos deterministas del motor de generación (Hito 2,
+  Sesión A), construidos solo contra la IR congelada (no dependen de `parsing/` ni
+  de `graph/`):
+  - **`generation/seeding.py` (T2.1).** `seed_for_table(seed_global, tabla)` deriva
+    la semilla de tabla con BLAKE2b sobre un mensaje con *framing* de prefijo de
+    longitud (ninguna descomposición ambigua de `(semilla, tabla)`) y dominios
+    separados por `person=`. `rng_for_row(seed_tabla, indice)` construye un
+    `random.Random` **por fila** sembrado desde `(seed_tabla, indice)`: el valor de
+    la fila *i* depende solo de su índice, no de un flujo secuencial por tabla, así
+    que es independiente del tamaño de lote y del orden de generación (test:
+    100 filas en lotes de 10, 100 y 7 producen lo mismo). Sin `random` global ni
+    `datetime.now()` (CLAUDE.md).
+  - **`generation/generators/base.py` (T2.2).** `GenContext` (dataclass con `rng`,
+    `column`, `table`; el hueco para `row`/`parent()` de la sesión D queda
+    documentado, no implementado). Protocolo `Generator.generate(ctx) -> Any`.
+    Registro por nombre (`register()` + `resolve(GeneratorSpec)`) con los parámetros
+    de cada generador validados por un modelo Pydantic propio (`extra="forbid"` ⇒
+    error de campo exacto si faltan o sobran). Envoltura de unicidad a nivel de
+    `resolve` (`unique=True`): 50 reintentos contra un conjunto de vistos y, al
+    agotarse, `UniqueExhaustedError` con tabla, columna y cardinalidad alcanzada vs
+    pedida. Los *entry points* de plugins quedan para v1.0; `TypeSpec.is_array` se
+    ignora esta sesión (la envoltura de arrays es del motor, sesión E).
+  - **Catálogo básico (T2.3), `generation/generators/`.** `faker` (una instancia de
+    Faker por locale —`es_ES` por defecto—, resembrada por fila desde el RNG, sin
+    `faker.unique`), `numeric_range` (uniform/normal/lognormal/zipf con solo `random`
+    estándar; respeta min/max con exclusividades, `round_to`, y para enteros los
+    bits del `TypeSpec` como cota implícita), `sequence` (arranque+paso),
+    `datetime_range` (date y timestamp, con zona si el tipo la declara; rango por
+    defecto una década FIJA, sin `datetime.now()`), `choice` (pesos), `template`
+    (`{tabla}_{columna}_{n}`), `uuid` (v4 derivado del RNG, determinista) y
+    `fallback` seguro por kind del `TypeSpec` (respeta `varchar(n)`, usa
+    `enum_values`). Tests en `tests/unit/generation/`: tipo devuelto, cotas y
+    exclusividades, reproducibilidad (misma semilla ⇒ misma secuencia; distinta ⇒
+    distinta), unicidad con agotamiento controlado, independencia del tamaño de lote
+    y tests estadísticos gruesos de zipf/normal/lognormal con semilla fija.
 - ADR-004 — lecciones del primer esquema real (inmobiliaria de 20 tablas,
   PostgreSQL 15; ver `docs/validaciones/`). Descongelación puntual de la IR
   (ADR-003) para tres construcciones que el esquema real necesita:
