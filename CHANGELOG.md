@@ -8,6 +8,66 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- T2.5+T2.4+T2.6 (#31) — configuración del usuario, heurísticas deterministas y el
+  **fusor** (Hito 2, Sesión B, §4 del plan). Cierra la cadena de prioridad de
+  especificacion.md §7.1 (usuario > IR > LLM > heurística > fallback) sobre la IR
+  congelada y el catálogo de generadores de la Sesión A; el LLM queda como hueco
+  reservado para el H3 (ADR-002):
+  - **`config/models.py` + `config/loader.py` (T2.5).** Modelos Pydantic del YAML del
+    MVP (§11): `version`, `seed`, `locale`, `dialect`, `llm`, `defaults`, `tables`
+    (`rows`, `columns.{generator, params, null_ratio, unique}`, `fk`, `rules`),
+    `refs`, `hierarchy`, `output`. `extra="forbid"` en todo ⇒ una clave desconocida
+    es error con su **ruta exacta** (`tables.viviendas.columns.foo.generator`). Las
+    estrategias de `fk` (uniform/zipf/unique_subset/quota, §7.4) se validan solo en
+    su *forma* (el selector es de la Sesión C); las `rules` se guardan como cadenas
+    **sin interpretar** (el mini-DSL es de la Sesión D); el bloque `llm` se parsea
+    entero pero no tiene efecto hasta el H3 salvo `min_confidence`, que el fusor ya
+    usa como umbral. Loader vía ruamel en modo seguro: un error de sintaxis YAML se
+    reporta con **línea y columna**, y un `ValidationError` con la ruta de cada campo.
+  - **`semantic/heuristics.py` (T2.4).** `infer_column(table, column) ->
+    HeuristicResult | None`: 43 patrones es/en ordenados del más específico al más
+    genérico (el orden es contrato y se testea: `codigo_postal` gana a `codigo`,
+    `fecha_nacimiento` a `fecha`, `usuario` a `nombre`; `id`/`*_id` van al final).
+    Cada patrón combina regex de nombre con condiciones de tipo y propone un
+    `GeneratorSpec` del catálogo. Confianzas honestas por patrón (0.6–0.95): `email`
+    0.95, `descripcion` 0.7 (el generador de relleno es pobre; el modo IA es del
+    H3B), `id`/`*_id` 0.6 (por debajo del umbral por defecto ⇒ en el fusor caen al
+    fallback, porque el valor real de una FK lo pone el selector de la Sesión C).
+    Sin match ⇒ `None` (el fusor decide el fallback). `password`/`hash` producen
+    SIEMPRE un marcador inerte (`template`), jamás un valor de Faker (privacidad).
+    Métrica contra las labels del H0 (fixtures 1–5), réplica de `compute_metrics.py`:
+    **91 % de acierto de rol y 91 % de generador**, muy por encima del umbral ≥ 60 %
+    del criterio de T2.4; marcada `@pytest.mark.metric`.
+  - **`semantic/merge.py` (T2.6).** `build_plan(spec, config) -> TablePlans`
+    (`ir/plans.py` estrena `TablePlan`/`ColumnPlan` con `generator`, `source`,
+    `confidence`, `role`, `warnings`; `"llm"` reservado en el `Literal` de `source`,
+    documentado como H3). La cadena §7.1 en orden exacto: (1) **usuario**, que manda
+    pero se valida contra la IR — un `choice` con valores fuera del enum/CHECK IN, o
+    unas cotas de usuario fuera de las del CHECK, se rechazan con `PlanError` que
+    nombra tabla.columna y las dos partes en conflicto; (2) **IR** — `enum_values`/
+    `CHECK IN` ⇒ `choice`; `autoincrement`/`GENERATED` ⇒ la BD asigna el valor y la
+    columna se excluye de los INSERT (`source="ir"`, generador `None`);
+    `bounds_derived` interseca las cotas del generador de CUALQUIER fuente (la
+    heurística de `anio` [1900, 2100] se recorta al CHECK [1900, 2026]); un UNIQUE/PK
+    de una sola columna fuerza `unique=True` aunque el usuario diga lo contrario;
+    (3) **heurística** si supera `min_confidence` (0.7 por defecto); (4) **fallback**
+    seguro por tipo, siempre con aviso por columna. `null_ratio` sobre una columna
+    `NOT NULL` ⇒ `PlanError` (y `defaults.null_ratio` no rompe columnas NOT NULL:
+    solo aplica a las anulables). Las columnas que participan en una FK llevan un
+    aviso provisional (el selector es de la Sesión C) y `excluded_values` de un
+    `<>`/`NOT IN` que un rango no puede evitar también se avisa: nada en silencio.
+    Determinista byte a byte (recorre tablas/columnas en el orden de la IR). Plan
+    golden de `inmobiliaria.sql` + el YAML de ejemplo de §11
+    (`tests/configs/inmobiliaria_ejemplo.yaml`) como snapshot revisado a ojo; sobre
+    `opaco.sql`, cero inventos (ninguna columna `heuristic`: SERIAL ⇒ IR, el resto
+    fallback). Tests nuevos en `tests/unit/config/` y `tests/unit/semantic/`
+    (498 passed en total).
+  - **Alcance no tocado** (declarado en los docstrings y con avisos en el plan):
+    `ir/schema.py` (congelada), `parsing/`, `constraints/`, `graph/` y `generators/`
+    quedan intactos; el fusor no wirea `config.locale` en los params de `faker` (el
+    locale por defecto sigue en `FakerParams`), el selector de FK es la Sesión C
+    (T2.8) y el intérprete de reglas la Sesión D (T2.9).
+
 - T2.1+T2.2+T2.3 (#29) — cimientos deterministas del motor de generación (Hito 2,
   Sesión A), construidos solo contra la IR congelada (no dependen de `parsing/` ni
   de `graph/`):
