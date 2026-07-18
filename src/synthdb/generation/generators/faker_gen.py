@@ -53,7 +53,7 @@ class FakerGenerator:
         # ⚡ Bolt: Direct assignment of the random instance is ~25% faster than
         # calling seed_instance in a tight loop, while preserving determinism
         # since ctx.rng is already isolated per-row.
-        self._faker.random = ctx.rng
+        self._faker.random = ctx.rng  # type: ignore[attr-defined]
         return self._faker_method(**self._kwargs)
 
 
