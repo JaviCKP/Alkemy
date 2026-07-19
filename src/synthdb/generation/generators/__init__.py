@@ -7,6 +7,7 @@ generadores por nombre vía `resolve(GeneratorSpec)`.
 """
 
 from synthdb.generation.generators import (  # noqa: F401 -- import por efecto (registro)
+    derived,
     faker_gen,
     numeric,
     temporal,
