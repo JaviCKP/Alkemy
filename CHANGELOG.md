@@ -8,6 +8,51 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- T2.7+T2.8 (#34) — **KeyStore** y **selección de claves foráneas** (Hito 2, Sesión C,
+  §4 del plan; especificacion.md §7.4). Construido solo contra la IR congelada y los
+  modelos de estrategia FK de la Sesión B; la selección concreta del padre la
+  consumirá el motor (Sesión E):
+  - **`generation/keystore.py` (T2.7).** `KeyStore` append-only por tabla:
+    `add(table, keys)`, `count(table)`, `get(table, index) -> tupla`. Las claves se
+    guardan **siempre como tupla** (PK simple = tupla de 1), de modo que la PK
+    compuesta no es un caso especial en ningún consumidor y `get` devuelve la tupla
+    entera, nunca componentes sueltos (§7.4). Solo memoria (el *spill* a SQLite en
+    disco es v1.0, dicho en el docstring). Smoke de rendimiento marcado
+    `@pytest.mark.slow`: 10⁶ claves añadidas + 10⁵ accesos aleatorios muy por debajo
+    del objetivo (~2 s), con cota holgada para no volverse inestable en CI.
+  - **`generation/fk.py` (T2.8).** Protocolo `FkSelector.pick(rng) -> int | None`
+    (contrato común, pensado para consumo por lotes: un selector por columna FK,
+    llamado una vez por fila hija con el RNG de esa fila) y las estrategias de §7.4:
+    `UniformSelector` (equiprobable), `ZipfSelector(s)` (pocos padres concentran
+    hijos; el ranking de popularidad se asigna por **índice de inserción** —padre 0 =
+    el más popular—, determinista y documentado, nunca por valor de clave),
+    `UniqueSubsetSelector` (1:1 sin reemplazo; agotamiento ⇒
+    `UniqueSubsetExhaustedError` con tabla, padres disponibles y filas pedidas) y
+    `NullRatioSelector` (envoltura que decide NULL **antes** de seleccionar: consume
+    el RNG del selector interior solo en las filas no nulas). `quota` va aparte por
+    ser un asignador de **lote completo**: `build_quota_assignment(rng, n_parents,
+    n_rows, min, max)` da a cada padre su `min`, reparte el excedente y baraja para no
+    correlacionar padre con posición; respeta `[min, max]` exactamente e infeasible
+    (por abajo o por arriba) ⇒ `QuotaInfeasibleError` con los cuatro números y el
+    rango factible. Determinismo total: toda la aleatoriedad entra por el `rng`
+    recibido, sin `random` global. Tests con estadística gruesa (semilla fija,
+    tolerancias amplias) para zipf/uniform, cotas exactas para quota, y determinismo
+    bit a bit en las cinco estrategias.
+  - **Cableado del plan (`semantic/merge.py`, toque mínimo).** Las columnas FK dejan
+    el generador provisional + aviso de la Sesión B y pasan a `ColumnPlan` con
+    `generator.type == "fk"`, `params` = volcado de la estrategia del YAML
+    (`tables.<t>.fk.<col>`, cuyos campos `s`/`min`/`max`/`null_ratio` coinciden con
+    los selectores) o `uniform` por defecto; `source="user"` si viene del YAML, `"ir"`
+    si es el defecto, `confidence=1.0`, sin avisos. La selección real sigue siendo del
+    motor. Snapshot golden de `inmobiliaria.sql` regenerado (cambio acotado a las 4
+    columnas FK: avisos provisionales fuera, generadores `fk` con su estrategia
+    dentro; nada más se movió). `pyproject.toml`: nuevo marcador `slow`.
+  - **Limitación señalada** (modelos de config intactos, Sesión B): `tables.<t>.fk`
+    indexa la estrategia por nombre de columna, así que en una FK **compuesta** solo
+    la columna nombrada recibiría la estrategia y las demás caerían al defecto. No
+    afecta a los fixtures del MVP (FK de una sola columna); si se necesita, es una
+    ampliación del modelo de config, no de esta sesión.
+
 - T2.5+T2.4+T2.6 (#31) — configuración del usuario, heurísticas deterministas y el
   **fusor** (Hito 2, Sesión B, §4 del plan). Cierra la cadena de prioridad de
   especificacion.md §7.1 (usuario > IR > LLM > heurística > fallback) sobre la IR

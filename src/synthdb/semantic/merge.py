@@ -21,17 +21,22 @@ Determinismo (CLAUDE.md): recorre tablas y columnas en el orden de la IR y no
 itera sobre estructuras sin orden definido, así que mismo `spec` + misma
 `Config` ⇒ mismo `TablePlans` byte a byte (`canonical_json`).
 
-Fuera de alcance de esta sesión, señalado con avisos para que nada quede en
-silencio: el **selector de claves foráneas** (sesión C, T2.8) — las columnas de
-una FK reciben aquí un generador provisional y un aviso; y las **reglas** del
-mini-DSL (sesión D, T2.9) — se guardan sin interpretar en la config.
+Las columnas que participan en una FK se resuelven aparte (`_fk_plan`): reciben el
+generador `fk` con la estrategia de selección del YAML (`tables.<t>.fk.<col>`, o
+`uniform` por defecto), sin pasar por heurísticas ni fallback, porque su valor no
+es un dato libre sino una referencia a una clave del padre. La **selección real**
+—qué padre concreto— es del motor (`generation/fk.py`, T2.8, consumido en la
+sesión E); aquí el plan solo deja fijada la estrategia y su origen.
+
+Fuera de alcance, sin interpretar en la config: las **reglas** del mini-DSL
+(sesión D, T2.9), que se guardan como cadenas opacas.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from synthdb.config.models import ColumnConfig, Config, Defaults, TableConfig
+from synthdb.config.models import ColumnConfig, Config, Defaults, FkStrategy, FkUniform, TableConfig
 from synthdb.ir.plans import ColumnPlan, PlanSource, TablePlan, TablePlans
 from synthdb.ir.schema import ColumnSpec, GeneratorSpec, SchemaSpec, TableSpec
 from synthdb.semantic.heuristics import infer_column
@@ -85,12 +90,16 @@ def _plan_column(
     bounds = _column_bounds(column)
     enum_set = _enum_set(column, bounds)
     unique_ir = _is_unique_ir(table, column)
-    fk_ref = _fk_reference(table, column)
     cconf = tconf.columns.get(column.name) if tconf is not None else None
 
     # (2, IR) La base de datos asigna el valor: se excluye de la generación.
     if column.type.autoincrement or column.generated:
         return _db_managed_plan(column)
+
+    # (2, IR) FK: el valor referencia una clave del padre, no es un dato libre; el
+    # generador es 'fk' con la estrategia de selección (el motor elige el padre).
+    if _is_fk_column(table, column):
+        return _fk_plan(column, _fk_strategy(tconf, column))
 
     # --- selección de fuente (orden §7.1) ---
     source: PlanSource
@@ -138,13 +147,6 @@ def _plan_column(
         updates["null_ratio"] = null_ratio
     if updates:
         generator = generator.model_copy(update=updates)
-
-    if fk_ref is not None:
-        warnings.append(
-            f"{ctx}: forma parte de una clave foránea (→ {fk_ref}); el selector de claves "
-            f"foráneas es de la sesión C (T2.8). El generador asignado aquí es provisional y "
-            f"no garantiza referencias válidas."
-        )
 
     return ColumnPlan(
         column=column.name,
@@ -201,13 +203,55 @@ def _is_unique_ir(table: TableSpec, column: ColumnSpec) -> bool:
     return table.primary_key == single or single in table.uniques
 
 
-def _fk_reference(table: TableSpec, column: ColumnSpec) -> str | None:
-    """`"tabla(col)"` si la columna participa en alguna FK, si no `None`."""
-    for fk in table.foreign_keys:
-        if column.name in fk.columns:
-            ref_cols = ", ".join(fk.ref_columns) if fk.ref_columns else "?"
-            return f"{fk.ref_table}({ref_cols})"
-    return None
+def _is_fk_column(table: TableSpec, column: ColumnSpec) -> bool:
+    """`True` si la columna participa en alguna clave foránea de la tabla."""
+    return any(column.name in fk.columns for fk in table.foreign_keys)
+
+
+def _fk_strategy(tconf: TableConfig | None, column: ColumnSpec) -> FkStrategy | None:
+    """Estrategia de FK que el YAML fija para la columna (`tables.<t>.fk.<col>`), si la hay.
+
+    La configuración indexa la estrategia por nombre de columna. En una FK compuesta
+    solo la columna cuyo nombre aparezca en `fk` recibe la estrategia; las demás caen
+    al defecto. Es una limitación del modelo de config (Sesión B), señalada en el PR:
+    no afecta a los fixtures del MVP, cuyas FK son de una sola columna.
+    """
+    if tconf is None:
+        return None
+    return tconf.fk.get(column.name)
+
+
+def _fk_plan(column: ColumnSpec, strategy: FkStrategy | None) -> ColumnPlan:
+    """`ColumnPlan` de una columna FK: generador `fk` con su estrategia de selección.
+
+    El valor real de la FK lo pone el selector del motor (`generation/fk.py`, T2.8,
+    consumido en la sesión E); aquí el plan solo fija QUÉ estrategia usar y de dónde
+    viene. `params` es el volcado de la estrategia del YAML —sus campos (`s`, `min`,
+    `max`, `null_ratio`) coinciden con los selectores— o `uniform` por defecto.
+
+    Args:
+        column: La columna FK que se planifica.
+        strategy: La estrategia del YAML para esta columna, o `None` para el defecto.
+
+    Returns:
+        Un `ColumnPlan` con `generator.type == "fk"`, `source="user"` si la estrategia
+        viene del YAML o `"ir"` si es el defecto, y sin avisos (la referencia es
+        estructural, no una inferencia dudosa).
+    """
+    if strategy is not None:
+        params = strategy.model_dump(exclude_none=True)
+        source: PlanSource = "user"
+    else:
+        params = FkUniform(strategy="uniform").model_dump(exclude_none=True)
+        source = "ir"
+    return ColumnPlan(
+        column=column.name,
+        generator=GeneratorSpec(type="fk", params=params),
+        source=source,
+        confidence=1.0,
+        role="fk",
+        warnings=[],
+    )
 
 
 def _column_bounds(column: ColumnSpec) -> dict[str, Any]:

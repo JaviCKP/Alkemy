@@ -13,7 +13,14 @@ from pathlib import Path
 import pytest
 
 from synthdb.config.loader import load_config
-from synthdb.config.models import ColumnConfig, Config, Defaults, LLMConfig, TableConfig
+from synthdb.config.models import (
+    ColumnConfig,
+    Config,
+    Defaults,
+    FkQuota,
+    LLMConfig,
+    TableConfig,
+)
 from synthdb.constraints.check_interp import interpret_checks
 from synthdb.ir.plans import ColumnPlan, TablePlans
 from synthdb.ir.schema import canonical_json
@@ -227,24 +234,51 @@ def test_heuristica_bajo_umbral_cae_al_fallback() -> None:
     assert cp.source == "fallback"
 
 
-# --- FK: aviso provisional (el selector es de la sesión C) --------------------
+# --- FK: generador 'fk' con estrategia de selección ---------------------------
 
 
-def test_columna_fk_lleva_aviso_provisional() -> None:
+def test_columna_fk_sin_yaml_usa_uniform_de_la_ir() -> None:
     plan = _plan(
         "CREATE TABLE clientes (id SERIAL PRIMARY KEY);\n"
         "CREATE TABLE viviendas (id SERIAL PRIMARY KEY,\n"
         "  propietario_id INT NOT NULL REFERENCES clientes(id));"
     )
     cp = _column(plan, "viviendas", "propietario_id")
-    assert any("clave foránea" in w and "sesión C" in w for w in cp.warnings)
+    assert cp.source == "ir"  # el defecto lo dicta la estructura, no el usuario
+    assert cp.confidence == 1.0
+    assert cp.role == "fk"
+    assert cp.generator is not None
+    assert cp.generator.type == "fk"
+    assert cp.generator.params == {"strategy": "uniform"}
+    assert cp.warnings == []  # sin aviso provisional: el plan queda completo
+
+
+def test_columna_fk_con_estrategia_del_yaml_es_user() -> None:
+    plan = _plan(
+        "CREATE TABLE compraventas (id SERIAL PRIMARY KEY);\n"
+        "CREATE TABLE pagos (id SERIAL PRIMARY KEY,\n"
+        "  compraventa_id INT NOT NULL REFERENCES compraventas(id));",
+        Config(
+            tables={
+                "pagos": TableConfig(
+                    fk={"compraventa_id": FkQuota(strategy="quota", min=1, max=12)}
+                )
+            }
+        ),
+    )
+    cp = _column(plan, "pagos", "compraventa_id")
+    assert cp.source == "user"
+    assert cp.generator is not None
+    assert cp.generator.type == "fk"
+    assert cp.generator.params == {"strategy": "quota", "min": 1, "max": 12}
+    assert cp.warnings == []
 
 
 # --- opaco.sql: cero inventos -------------------------------------------------
 
 
 def test_opaco_no_inventa_semantica() -> None:
-    """Sobre nombres opacos, ninguna columna es 'heuristic': o la asigna la BD o es fallback."""
+    """Sobre nombres opacos, nada es 'heuristic': lo asigna la BD, es una FK o es fallback."""
     plan = _plan_schema("opaco.sql")
 
     generatable = 0
@@ -252,7 +286,9 @@ def test_opaco_no_inventa_semantica() -> None:
         for cp in table_plan.columns:
             assert cp.source in {"ir", "fallback"}, f"{cp.column} inventó source={cp.source}"
             if cp.source == "ir":
-                assert cp.generator is None  # solo columnas que asigna la BD (SERIAL)
+                # o la asigna la BD (SERIAL ⇒ generador None) o es una FK estructural
+                # (generador 'fk'); en ningún caso semántica inventada sobre un nombre opaco.
+                assert cp.generator is None or cp.generator.type == "fk"
             else:
                 generatable += 1
                 assert cp.generator is not None and cp.generator.type == "fallback"

@@ -100,6 +100,7 @@ markers = [
   "llm: requiere un modelo servido (Ollama u OpenAI-compatible); excluido de CI estándar",
   "integration: requiere una base de datos real (testcontainers)",
   "metric: mide exactitud de las heurísticas contra las labels del H0 (T2.4); informativa, no unitaria",
+  "slow: smoke de rendimiento a escala (p. ej. 10⁶ claves en KeyStore, T2.7); deseleccionable con -m 'not slow'",
 ]
 
 [tool.coverage.run]
