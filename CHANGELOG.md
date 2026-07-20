@@ -8,6 +8,78 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- T2.9+T2.10 (#36) — **mini-DSL de reglas** (parser + intérprete de lista blanca) y
+  **RowContext + orden de columnas intra-fila** (Hito 2, Sesión D, §4 del plan;
+  especificacion.md §7.2). Las `rules` del YAML dejan de ser cadenas opacas (Sesión B)
+  y pasan a interpretarse; el motor real que las consume por fila es la Sesión E:
+  - **`rules/dsl.py` (T2.9).** `parse_rule(text) -> Rule`: reutiliza el parser de
+    EXPRESIONES de sqlglot (postgres) y **traduce** su AST a uno propio y tipado
+    (`Const`, `Col`, `ParentCol`, `Ref`, `Call`, `Compare`, `Arith`, `BoolOp`, `Not`,
+    `Neg`). La traducción es una **lista blanca CERRADA por tipo de nodo**: cualquier
+    nodo de sqlglot no contemplado ⇒ `RuleParseError` con el fragmento; jamás se
+    guarda ni evalúa un nodo de sqlglot tal cual (CLAUDE.md prohíbe eval/exec, y esta
+    sesión es donde esa regla se juega el proyecto). Gramática: literales (número,
+    cadena, booleano, NULL) y columnas de la fila; `parent(<fk>).<columna>`;
+    `ref('<nombre>')`; comparaciones (`= <> < <= > >=`), aritmética (`+ - * /`),
+    `and/or/not`. Se rechazan explícitamente subíndices (`a[0]`), atributos
+    encadenados (`a.b.c`), columnas cualificadas (`t.c`), `||`, `^`, `%`, `LIKE`,
+    `IN`, `BETWEEN`, `IS NULL`, `CAST`, `CASE`, subconsultas, comentarios (`--`,
+    `/* */`), `;`, y toda función fuera de la lista blanca (`upper`, `concat`,
+    `system`, `getattr`, `__import__`…). Los **agregados de grupo** (`sum`, `count`…)
+    se rechazan con mención expresa a la v1.0 (`sum_over_group`, post-MVP). Se cierra
+    también el hueco de sqlglot que aparca argumentos sobrantes de `round`/`len`/
+    `date_add` en slots con nombre (`truncate`/`binary`/`unit`): esos slots se
+    rechazan en vez de ignorarse en silencio. `clasify_rule(rule) -> RuleKind`:
+    `bound` (desigualdad con una columna local despejada frente a una expresión que no
+    la referencia — cota del generador), `derivation` (`col = expr` — la calcula el
+    generador `derived`), `assertion` (cualquier otra cosa evaluable). Toda regla se
+    re-evalúa además como aserción (doble uso de §7.2). Helpers para el motor:
+    `as_bound` (columna, lado inferior/superior, exclusividad, expresión de la cota),
+    `as_derivation` (columna + expresión) y `rule_dependencies` (dependencia de orden
+    implícita: destino + columnas locales leídas).
+  - **`rules/eval.py` (T2.9).** `evaluate(rule, ctx)` y `check(rule, ctx) -> bool`
+    con un intérprete que despacha por tipo de nodo con operaciones nativas
+    escogidas a mano: sin `eval`/`exec`/`compile`/`getattr` dinámico sobre ningún
+    nombre del usuario. La **lista blanca de funciones vive en UN solo dict**
+    (`FUNCTIONS`): `date(y,m,d)`, `date_add(fecha, días)`, `years_between(a,b)`,
+    `noise(sigma)` (multiplicativo `1 + N(0, sigma)`, con el **RNG de la fila** ⇒
+    determinista, sin `random` global), `round(x, ndigits=0)`, `len(texto)`; el
+    parser consulta ese mismo dict (nombres + aridad) para rechazar en compilación.
+    Errores de evaluación (columna inexistente, `ref` desconocida, fila padre
+    ausente, división entre cero, tipos incompatibles) ⇒ `RuleEvalError` con la regla
+    y la fila. `check` exige que la regla evalúe a booleano.
+  - **`generation/context.py` (T2.10).** `RowContext` **extiende** el `GenContext` de
+    la Sesión A rellenando el hueco documentado: `row` (valores ya generados),
+    `refs` y `parent(<fk>) -> dict | None`; los generadores existentes no cambian de
+    firma (un `RowContext` ES un `GenContext`). `parent()` se alimenta de un
+    `ParentResolver` inyectado (protocolo; `mapping_resolver` lo respalda con un
+    `dict` en tests, y el motor lo poblará desde el KeyStore/selector de FK en la
+    Sesión E). `build_column_order(table_plan, rules) -> list[str]`: grafo de
+    dependencias IMPLÍCITAS de las reglas `bound`/`derivation` (la columna que
+    acota/deriva se genera tras las columnas locales que lee) + topo-sort determinista
+    (Kahn con min-heap, **desempate alfabético**); ciclo entre columnas ⇒ `PlanError`
+    nombrando el ciclo.
+  - **Generador `derived` (T2.10), `generation/generators/derived.py`.** Registrado
+    en el catálogo como uno más; su `expression` (lado derecho de la derivación) se
+    parsea una vez y se evalúa por fila sobre el `RowContext`. Exige un `RowContext`
+    (lo estrecha con `isinstance`); un `GenContext` plano ⇒ `TypeError` accionable.
+  - **Alcance no tocado** (task de la sesión): `ir/schema.py`, `parsing/`,
+    `constraints/`, `graph/`, `keystore`/`fk`, `merge.py` y `config/` quedan intactos.
+    Las `rules` siguen llegando crudas del YAML. **Aviso para la Sesión E**: las
+    reglas de ejemplo de `tests/configs/inmobiliaria_ejemplo.yaml` son marcadores de
+    la Sesión B (`superficie_from_parent(...)`, `sum_over_group(...) ~= ... +- 0.01`)
+    que **no** conforman la gramática real del mini-DSL; habrá que reescribirlas en
+    DSL válido (p. ej. `precio = parent(vivienda_id).superficie_m2 * ref('precio_m2_base') * noise(0.2)`)
+    cuando el motor las consuma. La derivación con `noise()` no satisface la igualdad
+    estricta al re-comprobarse como aserción (el ruido se vuelve a muestrear): es la
+    Sesión E quien fija la política de re-validación de derivaciones aleatorias.
+  - **Docs.** `docs/dsl.md` estrena la referencia de la gramática, la lista blanca de
+    funciones, los tres tipos de regla con ejemplos de §7.2/§16, y los errores
+    comunes. Tests nuevos en `tests/unit/rules/` y `tests/unit/generation/test_context.py`
+    (parseo de cada construcción y anidamientos, batería de rechazo una por línea,
+    clasificación, evaluación determinista, orden de columnas con cadena y ciclo, y el
+    ejemplo trabajado de §16 sobre filas de juguete).
+
 - T2.7+T2.8 (#34) — **KeyStore** y **selección de claves foráneas** (Hito 2, Sesión C,
   §4 del plan; especificacion.md §7.4). Construido solo contra la IR congelada y los
   modelos de estrategia FK de la Sesión B; la selección concreta del padre la
