@@ -1,0 +1,3 @@
+## 2026-07-20 - [O(N^2) list comprehension]
+**Learning:** Python list comprehensions with multiple `for` clauses act like nested loops. In graph dependency structures, computing phase layers using a nested comprehension iterates over all levels and all Strongly Connected Components (SCCs), leading to O(N^2) complexity. This codebase-specific pattern was a bottleneck for schemas with long dependency chains.
+**Action:** When mapping graph nodes (SCCs) to distinct levels or phases, allocate a list of buckets first (`[[] for _ in range(max)]`) and loop over the nodes *once* to populate their respective buckets. This turns an O(N^2) operation into O(N).
