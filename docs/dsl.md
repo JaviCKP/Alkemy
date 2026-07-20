@@ -47,6 +47,22 @@ arbitrario, lea el sistema de ficheros o toque la red.
   de `.<columna>`; `parent(<fk>)` a secas no es una expresión válida.
 - `ref('<nombre>')` toma una **cadena** con el nombre de la constante.
 
+### Nombres de columna y de FK: identificadores seguros
+
+Los nombres de columna, el nombre de la FK de `parent(<fk>)` y el nombre de la
+columna del padre en `parent(fk).<columna>` deben ser **identificadores seguros**:
+casar con `[A-Za-z_][A-Za-z0-9_]*` y **no** usar el patrón *dunder* (doble guion
+bajo inicial y final, `__x__`). Es una restricción de **seguridad** (defensa en
+profundidad): corta en el parser cualquier nombre que un resolutor de columnas o de
+padre basado en atributos pudiera convertir en un acceso a un interno de Python.
+
+Consecuencia (limitación): una columna de PostgreSQL que solo exista **entre
+comillas** —con espacios, guiones o dígito inicial (`"mi columna"`, `"2col"`)— o con
+un nombre dunder (`"__dict__"`) **no es referenciable desde una regla del DSL**. Si
+necesitas usarla en una regla, renómbrala en el esquema a un identificador seguro. Un
+guion bajo doble solo al inicio (`__x`) o solo al final (`x__`) sí es válido: la
+restricción es únicamente el patrón dunder completo.
+
 ### Operadores
 
 | Tipo | Operadores |

@@ -31,12 +31,22 @@ constante con nombre del bloque `refs`.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError as _SqlglotParseError
+
+_SAFE_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+"""Forma de un identificador seguro del DSL: letra o `_`, luego alfanuméricos o `_`.
+
+Deja fuera cualquier nombre que solo sea referenciable entrecomillado en PostgreSQL
+(espacios, guiones, empezar por dígito...). Es defensa en profundidad: hoy un nombre
+raro moriría limpiamente en el `dict` del intérprete, pero acota la superficie por si
+un `ParentResolver` futuro resolviese columnas por atributo en vez de por clave.
+"""
 
 RuleKind = Literal["bound", "derivation", "assertion"]
 """Clasificación de una regla según su uso principal en el motor (§7.2).
@@ -298,6 +308,35 @@ def _translate(node: exp.Expr, text: str) -> Node:
     )
 
 
+def _ensure_safe_identifier(name: str, text: str, role: str) -> None:
+    """Rechaza un identificador que no sea seguro o que use el patrón dunder.
+
+    Dos comprobaciones de defensa en profundidad sobre cada nombre de columna, de FK
+    de `parent()` o de columna del padre que llega del texto:
+
+    1. Debe casar con `[A-Za-z_][A-Za-z0-9_]*`: un nombre PostgreSQL entrecomillado
+       con espacios, guiones o dígito inicial no es referenciable desde el DSL.
+    2. No puede ser un *dunder* (`__x__`): aunque `__dict__` case con el patrón
+       anterior, un nombre así se corta aquí para que ningún resolutor futuro basado
+       en atributos pueda convertirlo en un acceso a interno de Python.
+
+    Raises:
+        RuleParseError: Si el nombre no es seguro o es un dunder.
+    """
+    if _SAFE_IDENTIFIER.fullmatch(name) is None:
+        raise RuleParseError(
+            f"la regla {text!r}: {role} {name!r} no es un identificador válido del "
+            "mini-DSL (solo letras, dígitos y '_', y sin empezar por dígito). Un nombre "
+            "PostgreSQL que solo exista entrecomillado no es referenciable desde una regla."
+        )
+    if name.startswith("__") and name.endswith("__"):
+        raise RuleParseError(
+            f"la regla {text!r}: {role} {name!r} usa el patrón de doble guion bajo "
+            "(dunder), prohibido por seguridad (defensa en profundidad frente a accesos "
+            "a atributos internos). Renombra la columna en el esquema."
+        )
+
+
 def _translate_column(node: exp.Column, text: str) -> Col:
     """Traduce una `exp.Column`, rechazando cualquier cualificación (`t.c`, `a.b.c`)."""
     if node.args.get("table") or node.args.get("db") or node.args.get("catalog"):
@@ -307,6 +346,7 @@ def _translate_column(node: exp.Column, text: str) -> Col:
             "'tabla.columna' ni accesos encadenados). Para una columna del padre usa "
             "parent(<fk>).<columna>."
         )
+    _ensure_safe_identifier(node.name, text, "la columna")
     return Col(node.name)
 
 
@@ -358,6 +398,8 @@ def _translate_parent(node: exp.Dot, text: str) -> ParentCol:
             f"la regla {text!r}: parent(<fk>) debe ir seguido de '.<columna>', no de "
             f"{column.sql(dialect=_DIALECT)!r}."
         )
+    _ensure_safe_identifier(arg.name, text, "la columna FK de parent()")
+    _ensure_safe_identifier(column.name, text, "la columna del padre")
     return ParentCol(fk=arg.name, column=column.name)
 
 

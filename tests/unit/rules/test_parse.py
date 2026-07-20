@@ -128,6 +128,13 @@ REJECTED = {
     "fstring_like": "f'{x}'",
     "star": "count(*)",
     "empty": "   ",
+    # Defensa en profundidad (revisión de #37): identificadores dunder e inseguros.
+    "dunder_column": "__dict__",
+    "dunder_parent_column": "parent(vivienda_id).__dict__",
+    "dunder_parent_fk": "parent(__class__).anio_construccion",
+    "dunder_only_underscores": "__ = 1",
+    "unsafe_quoted_column_space": '"mi columna" > 0',
+    "unsafe_quoted_column_digit": '"2col" = 1',
 }
 
 
@@ -174,3 +181,19 @@ def test_arity_and_extra_args_rejected(text: str) -> None:
 def test_parent_and_ref_shape_rejected(text: str) -> None:
     with pytest.raises(RuleParseError):
         parse_rule(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "_privado",  # un solo guion bajo inicial no es dunder
+        "__leading",  # guion bajo doble SOLO al inicio no es dunder
+        "trailing__",  # guion bajo doble SOLO al final no es dunder
+        "col_2",  # dígitos y guiones bajos internos
+        "parent(fk_id)._interno",  # ídem sobre la columna del padre
+    ],
+)
+def test_safe_identifiers_with_underscores_accepted(text: str) -> None:
+    # El corte de dunder (__x__) e identificador inseguro no debe alcanzar los nombres
+    # normales con guiones bajos solo al inicio o al final (regresión sobre #37).
+    parse_rule(text)  # no lanza
