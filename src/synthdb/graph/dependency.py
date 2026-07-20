@@ -69,15 +69,17 @@ def phase_layers(g: nx.DiGraph) -> list[list[str]]:
         phase_index[scc_id] = (max(deps_phases) + 1) if deps_phases else 0
 
     max_phase = max(phase_index.values(), default=-1)
-    return [
-        sorted(
-            name
-            for scc_id, index in phase_index.items()
-            if index == level
-            for name in condensation.nodes[scc_id]["members"]
-        )
-        for level in range(max_phase + 1)
-    ]
+    if max_phase == -1:
+        return []
+
+    # O(V) optimization: instead of a nested comprehension that iterates
+    # over phase_index for every layer (O(V^2)), we group the members
+    # into layers in a single pass.
+    layers: list[list[str]] = [[] for _ in range(max_phase + 1)]
+    for scc_id, level in phase_index.items():
+        layers[level].extend(condensation.nodes[scc_id]["members"])
+
+    return [sorted(layer) for layer in layers]
 
 
 def _is_one_to_one(table: TableSpec, fk_columns: list[str]) -> bool:
