@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from synthdb.config.loader import load_config
+from synthdb.config.loader import ConfigError, load_config
 from synthdb.config.models import (
     ColumnConfig,
     Config,
@@ -272,6 +272,39 @@ def test_columna_fk_con_estrategia_del_yaml_es_user() -> None:
     assert cp.generator.type == "fk"
     assert cp.generator.params == {"strategy": "quota", "min": 1, "max": 12}
     assert cp.warnings == []
+
+
+def test_estrategia_en_cualquier_columna_aplica_a_toda_fk_compuesta() -> None:
+    plan = _plan(
+        "CREATE TABLE p (tenant INT, id INT, PRIMARY KEY (tenant, id));\n"
+        "CREATE TABLE h (tenant INT, parent_id INT, "
+        "FOREIGN KEY (tenant, parent_id) REFERENCES p(tenant, id));",
+        Config(
+            tables={"h": TableConfig(fk={"parent_id": FkQuota(strategy="quota", min=0, max=3)})}
+        ),
+    )
+    assert _column(plan, "h", "tenant").generator == _column(plan, "h", "parent_id").generator
+
+
+def test_estrategias_distintas_en_la_misma_fk_compuesta_son_config_error() -> None:
+    with pytest.raises(ConfigError) as exc:
+        _plan(
+            "CREATE TABLE p (tenant INT, id INT, PRIMARY KEY (tenant, id));\n"
+            "CREATE TABLE h (tenant INT, parent_id INT, "
+            "FOREIGN KEY (tenant, parent_id) REFERENCES p(tenant, id));",
+            Config(
+                tables={
+                    "h": TableConfig(
+                        fk={
+                            "tenant": FkQuota(strategy="quota", min=0, max=3),
+                            "parent_id": FkQuota(strategy="quota", min=1, max=3),
+                        }
+                    )
+                }
+            ),
+        )
+    message = str(exc.value)
+    assert "tenant" in message and "parent_id" in message
 
 
 # --- opaco.sql: cero inventos -------------------------------------------------

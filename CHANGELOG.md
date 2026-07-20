@@ -8,6 +8,17 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- H2 Sesión E (T2.11+T2.12+T2.13) — motor determinista en memoria con
+  compilación previa de generadores y reglas, ejecución por fases/lotes,
+  `KeyStore` y selectores de FK, `RowContext` con padres reales, costura
+  `complete_batch`, jerarquías por niveles, ciclos con actualizaciones diferidas,
+  puentes sin pares repetidos y arrays de 0–5 elementos. Se añade
+  `validation.structural.validate_batch` para tipos, NOT NULL, CHECK, UNIQUE/PK,
+  FK y re-evaluación exacta de todas las reglas, con abortado o cuarentena dentro
+  de `Dataset`. La configuración de una FK compuesta puede nombrar cualquiera de
+  sus columnas; estrategias contradictorias en la misma relación producen un
+  `ConfigError` que cita ambas claves.
+
 - T2.9+T2.10 (#36) — **mini-DSL de reglas** (parser + intérprete de lista blanca) y
   **RowContext + orden de columnas intra-fila** (Hito 2, Sesión D, §4 del plan;
   especificacion.md §7.2). Las `rules` del YAML dejan de ser cadenas opacas (Sesión B)

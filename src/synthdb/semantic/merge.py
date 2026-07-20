@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from synthdb.config.loader import ConfigError
 from synthdb.config.models import ColumnConfig, Config, Defaults, FkStrategy, FkUniform, TableConfig
 from synthdb.ir.plans import ColumnPlan, PlanSource, TablePlan, TablePlans
 from synthdb.ir.schema import ColumnSpec, GeneratorSpec, SchemaSpec, TableSpec
@@ -71,6 +72,8 @@ def build_plan(spec: SchemaSpec, config: Config) -> TablePlans:
         PlanError: Si la configuración del usuario contradice una restricción de
             la IR (ver la clase).
     """
+    for table in spec.tables:
+        _validate_composite_fk_strategies(table, config.tables.get(table.name))
     tables = [_plan_table(table, config) for table in spec.tables]
     return TablePlans(tables=tables)
 
@@ -99,7 +102,7 @@ def _plan_column(
     # (2, IR) FK: el valor referencia una clave del padre, no es un dato libre; el
     # generador es 'fk' con la estrategia de selección (el motor elige el padre).
     if _is_fk_column(table, column):
-        return _fk_plan(column, _fk_strategy(tconf, column))
+        return _fk_plan(column, _fk_strategy(table, tconf, column))
 
     # --- selección de fuente (orden §7.1) ---
     source: PlanSource
@@ -208,17 +211,44 @@ def _is_fk_column(table: TableSpec, column: ColumnSpec) -> bool:
     return any(column.name in fk.columns for fk in table.foreign_keys)
 
 
-def _fk_strategy(tconf: TableConfig | None, column: ColumnSpec) -> FkStrategy | None:
-    """Estrategia de FK que el YAML fija para la columna (`tables.<t>.fk.<col>`), si la hay.
+def _fk_strategy(
+    table: TableSpec, tconf: TableConfig | None, column: ColumnSpec
+) -> FkStrategy | None:
+    """Devuelve la estrategia configurada para la relación FK completa.
 
-    La configuración indexa la estrategia por nombre de columna. En una FK compuesta
-    solo la columna cuyo nombre aparezca en `fk` recibe la estrategia; las demás caen
-    al defecto. Es una limitación del modelo de config (Sesión B), señalada en el PR:
-    no afecta a los fixtures del MVP, cuyas FK son de una sola columna.
+    Cualquier columna local puede nombrar una FK compuesta en el YAML. La
+    estrategia encontrada se aplica a todos sus componentes, porque el motor
+    selecciona una tupla de clave padre de forma atómica.
     """
     if tconf is None:
         return None
-    return tconf.fk.get(column.name)
+    for fk in table.foreign_keys:
+        if column.name not in fk.columns:
+            continue
+        for fk_column in fk.columns:
+            strategy = tconf.fk.get(fk_column)
+            if strategy is not None:
+                return strategy
+    return None
+
+
+def _validate_composite_fk_strategies(table: TableSpec, tconf: TableConfig | None) -> None:
+    """Rechaza estrategias distintas que nombren la misma FK compuesta."""
+    if tconf is None:
+        return
+    for fk in table.foreign_keys:
+        configured = [(column, tconf.fk[column]) for column in fk.columns if column in tconf.fk]
+        if len(configured) < 2:
+            continue
+        first_column, first_strategy = configured[0]
+        for column, strategy in configured[1:]:
+            if strategy != first_strategy:
+                raise ConfigError(
+                    f"tables.{table.name}.fk: las claves '{first_column}' y '{column}' "
+                    f"apuntan a la misma FK compuesta ({', '.join(fk.columns)}) pero "
+                    "declaran estrategias distintas. Configura la relación una sola "
+                    "vez, usando cualquiera de sus columnas."
+                )
 
 
 def _fk_plan(column: ColumnSpec, strategy: FkStrategy | None) -> ColumnPlan:
