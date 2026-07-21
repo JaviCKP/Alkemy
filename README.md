@@ -28,11 +28,14 @@ uv run synthdb export   tests/schemas/inmobiliaria.sql -c config.yaml --format s
 - **`generate`** escribe un CSV o JSON por tabla, respetando el orden de columnas,
   con `NULL` como campo vacío y arrays serializados.
 - **`export`** escribe un `seed.sql` cargable en PostgreSQL con `psql`: `INSERT`
-  multi-fila por fases, `UPDATE` para cerrar ciclos, literales escalares
-  renderizados con sqlglot y arrays en el formato de texto nativo de PostgreSQL
-  (sin concatenación ni escapado SQL artesanal). Si la cuarentena deja un hueco en
-  una secuencia `SERIAL`, `export` lo rechaza (código 4) en vez de emitir un
-  `seed.sql` con integridad referencial rota.
+  multi-fila por fases, `UPDATE` para cerrar ciclos y literales escalares
+  construidos por sqlglot, que escapa el literal SQL exterior. Los arrays se
+  codifican por dentro con el formato textual nativo de PostgreSQL (§8.15.2,
+  `Array Value Input`) y ese texto completo vuelve a pasar por sqlglot; así el
+  tipo real de la columna, también para `enum[]`, se resuelve al cargarlo. Si la
+  cuarentena deja un hueco en una secuencia `SERIAL`, `export` lo rechaza
+  (código 4) en vez de emitir un `seed.sql` con integridad referencial rota;
+  `generate` CSV/JSON continúa con las filas aceptadas.
 
 `generate` y `export` aceptan `--dry-run` (ejecutan el pipeline, muestran el plan
 y 10 filas por tabla, y no escriben nada). Misma semilla ⇒ misma salida byte a

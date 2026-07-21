@@ -268,6 +268,32 @@ def test_generate_reports_non_empty_quarantine(
     assert "pedidos" in result.output
 
 
+def test_generate_dry_run_reports_quarantine_if_rendering_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El informe no se pierde si el render del dry-run falla tras generar."""
+    monkeypatch.setattr(engine, "complete_batch", _quarantine_pedidos_row_one)
+
+    def fail_render(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("fallo de render de muestra")
+
+    monkeypatch.setattr("synthdb.cli._render_dry_run", fail_render)
+    result = _invoke(
+        "generate",
+        _fixture("ciclos_nullable"),
+        "-c",
+        _config(tmp_path, _CICLOS_CFG),
+        "-o",
+        str(tmp_path / "out"),
+        "--dry-run",
+    )
+
+    assert result.exit_code == 1
+    assert result.output.count("Cuarentena:") == 1
+    assert "pedidos: 1 fila(s)" in result.output
+    assert "Primer motivo:" in result.output
+
+
 # --- export ------------------------------------------------------------------
 
 
@@ -548,6 +574,7 @@ def test_export_serial_gap_reports_quarantine_before_exiting_four(
     # La cuarentena se informa exactamente una vez, con tabla y primer motivo.
     assert result.output.count("Cuarentena:") == 1
     assert "parent" in result.output
+    assert "parent: 1 fila(s)" in result.output
     assert "Primer motivo:" in result.output
 
 
@@ -571,6 +598,44 @@ def test_generate_io_error_still_reports_quarantine(
     assert "Traceback" not in result.output
     assert result.output.count("Cuarentena:") == 1
     assert "pedidos" in result.output
+
+
+def test_export_io_error_still_reports_quarantine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La escritura fallida posterior a `Dataset` no pierde el informe."""
+
+    def quarantine_first_date_row(batch: list[dict[str, Any]]) -> None:
+        for row in batch[:1]:
+            row["fecha"] = None
+
+    monkeypatch.setattr(engine, "complete_batch", quarantine_first_date_row)
+    schema_path = tmp_path / "schema.sql"
+    schema_path.write_text(
+        "CREATE TABLE pedidos (id INT PRIMARY KEY, fecha DATE NOT NULL);", encoding="utf-8"
+    )
+    config_path = Path(_config(tmp_path, "seed: 3\ntables: {pedidos: {rows: 3}}\n"))
+
+    def fail_write_bytes(_path: Path, _data: bytes) -> int:
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr(Path, "write_bytes", fail_write_bytes)
+    result = _invoke(
+        "export",
+        str(schema_path),
+        "-c",
+        str(config_path),
+        "--format",
+        "sql",
+        "-o",
+        str(tmp_path / "seed.sql"),
+    )
+
+    assert result.exit_code == 3, result.output
+    assert "Traceback" not in result.output
+    assert result.output.count("Cuarentena:") == 1
+    assert "pedidos: 1 fila(s)" in result.output
+    assert "Primer motivo:" in result.output
 
 
 def _quarantine_pedidos_row_one(batch: list[dict[str, Any]]) -> None:

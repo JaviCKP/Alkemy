@@ -25,12 +25,15 @@ imprimen el plan y 10 filas de muestra por tabla, y **no escriben nada**.
 
 Códigos de salida (sin traceback nunca, CLAUDE.md): `0` correcto (con o sin
 avisos), `1` error de sintaxis SQL (`ParseError`), `2` ciclo irrompible
-(`UnbreakableCycle`), `3` archivo inexistente o ilegible, `4` error de plan o
-de configuración (`PlanError`/`ConfigError`, con el mensaje completo), `5`
-generación abortada por `output.on_error=abort` ante una fila inválida. La
-cuarentena no vacía se informa SIEMPRE al final (tabla, nº de filas y primer
-motivo). Los diagnósticos de error van a stderr como texto plano; la
-presentación y el JSON, a stdout.
+(`UnbreakableCycle`), `3` archivo inexistente/ilegible o error de E/S al
+escribir, `4` error de plan/configuración, colisión o contención de salida
+(`EmitPathError`), o `ExportIntegrityError`, y `5` generación abortada por
+`output.on_error=abort` ante una fila inválida. La cuarentena no vacía se
+informa exactamente una vez (tabla, nº de filas y primer motivo) después de
+generar el `Dataset`, también si falla una etapa posterior. `generate` CSV/JSON
+continúa con las filas aceptadas; `export` SQL rechaza con código 4 una
+secuencia `SERIAL` no contigua. Los diagnósticos de error van a stderr como
+texto plano; la presentación y el JSON, a stdout.
 """
 
 from __future__ import annotations
@@ -519,8 +522,10 @@ def generate(
 
     console = Console(highlight=False)
     if dry_run:
-        _render_dry_run(console, spec, config, dataset)
-        _report_quarantine(spec, dataset, stderr)
+        try:
+            _render_dry_run(console, spec, config, dataset)
+        finally:
+            _report_quarantine(spec, dataset, stderr)
         return
 
     # La cuarentena se informa en el `finally`: EXACTAMENTE una vez, tanto si la
@@ -595,8 +600,10 @@ def export(
 
     console = Console(highlight=False)
     if dry_run:
-        _render_dry_run(console, spec, config, dataset)
-        _report_quarantine(spec, dataset, stderr)
+        try:
+            _render_dry_run(console, spec, config, dataset)
+        finally:
+            _report_quarantine(spec, dataset, stderr)
         return
 
     # La cuarentena se informa en el `finally`: EXACTAMENTE una vez, también si

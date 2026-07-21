@@ -290,6 +290,7 @@ _TRICKY_TEXT = [
     "NULL",
     "café ñ 日本",
     "O'Brien",
+    None,
 ]
 _UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
@@ -313,7 +314,17 @@ _NON_EMPTY: dict[str, list[object]] = {
     "t_ts": [datetime.datetime(2020, 1, 2, 3, 4, 5)],
     "t_bool": [True, False],
     "t_uuid": [_UUID],
-    "t_json": [{"a": 1}, {"b": "x,y"}],
+    "t_json": [
+        {"a": 1},
+        {"b": "x,y"},
+        {
+            "empty": "",
+            "null_text": "NULL",
+            "quote_backslash": 'he said "hi"' + _ARR_BS + "slash",
+            "unicode": "café ñ 日本",
+        },
+        ["nested,comma", "NULL"],
+    ],
     "t_bytea": [b"\xde\xad", b"\x00\xff"],
     "t_enum": ["red", "green,ish"],
 }
@@ -398,6 +409,6 @@ def test_array_types_round_trip_through_postgres() -> None:
     assert full_by_col["t_ts"] == [datetime.datetime(2020, 1, 2, 3, 4, 5)]
     assert full_by_col["t_bool"] == [True, False]
     assert full_by_col["t_uuid"] == [_UUID]
-    assert [json.loads(x) for x in full_by_col["t_json"]] == [{"a": 1}, {"b": "x,y"}]
+    assert [json.loads(x) for x in full_by_col["t_json"]] == _NON_EMPTY["t_json"]
     assert [bytes(x) for x in full_by_col["t_bytea"]] == [b"\xde\xad", b"\x00\xff"]
     assert full_by_col["t_enum"] == ["red", "green,ish"]

@@ -17,7 +17,13 @@ import sqlglot
 
 from synthdb.config.models import Config, FkUniform, TableConfig
 from synthdb.emit import generate_files
-from synthdb.emit.sql_file import ExportIntegrityError, _ident, _needs_quote, render_sql
+from synthdb.emit.sql_file import (
+    ExportIntegrityError,
+    _ident,
+    _needs_quote,
+    _render_value,
+    render_sql,
+)
 from synthdb.generation import engine
 from synthdb.generation.engine import Dataset, generate_dataset
 from synthdb.ir.plans import InsertPhase, UpdatePhase
@@ -115,6 +121,12 @@ def test_empty_array_is_the_untyped_empty_array_literal() -> None:
     assert "'{}'" in sql
     assert "CAST" not in sql
     assert "ARRAY[]" not in sql
+
+
+def test_array_null_element_is_native_null_and_nested_json_is_json_text() -> None:
+    """Los elementos especiales mantienen la semántica nativa de PostgreSQL."""
+    assert _render_value([None, "NULL"]) == "'{NULL,\"NULL\"}'"
+    assert _render_value([["a,b"]]) == '\'{"[\\"a,b\\"]"}\''
 
 
 def test_header_declares_utf8_and_standard_strings() -> None:

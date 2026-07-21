@@ -16,18 +16,27 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     `csv_json.py` emite un CSV y un JSON por tabla en UTF-8, con el orden de
     columnas del esquema, `NULL` como campo vacío (CSV) o `null` (JSON), arrays
     como JSON en la celda o lista nativa, y terminador `\n` fijo (reproducibilidad
-    multiplataforma). `sql_file.py` emite un `seed.sql` de PostgreSQL dirigido por
+    multiplataforma). Los nombres normales en minúsculas conservan `<tabla>.csv`
+    / `.json`; mayúsculas, Unicode, percent y caracteres no seguros se codifican
+    de forma inyectiva incluso al plegar mayúsculas, y los reservados de Windows
+    se escapan sin un prefijo que pueda colisionar con un nombre real. La lista
+    completa de nombres se valida antes de escribir; una colisión o ruta fuera
+    de `--out` es `EmitPathError` y `generate` termina con código 4. `sql_file.py`
+    emite un `seed.sql` de PostgreSQL dirigido por
     las fases del plan: `INSERT` multi-fila por lotes, `UpdatePhase` como `UPDATE`
     tras sus `INSERT`, `BEGIN`/`COMMIT` por fase y `SET CONSTRAINTS ALL DEFERRED`
     en los ciclos diferibles. **Los literales escalares se renderizan con el
     generador de expresiones de sqlglot** (`exp.Literal`, dialecto postgres),
-    nunca por concatenación —barrera anti-inyección—; los **arrays** (vacíos o no)
+    que escapa el literal SQL exterior; el contenido interno de los **arrays**
+    (vacíos o no)
     se emiten como un único literal de texto en el **formato nativo de arrays de
     PostgreSQL** (`'{}'`, `'{a,b}'`, `'{"a,b","c\"d"}'`), que sqlglot escapa como
     literal SQL exterior y cuyo contenido se codifica según ese formato (elementos
     con coma/llave/comilla/backslash/espacio o el literal `NULL` van entre comillas)
     — así PostgreSQL lo resuelve contra el tipo real de la columna, también para
-    `enum[]`. Se omiten las columnas autoincrementales, se cualifican los nombres
+    `enum[]`. En esta salida hay dos capas distintas: sqlglot escapa el literal
+    SQL exterior y el contenido de cada array sigue el formato textual nativo de
+    PostgreSQL (§8.15.2). Se omiten las columnas autoincrementales, se cualifican los nombres
     con esquema y se entrecomillan los identificadores solo cuando el plegado de
     PostgreSQL lo exige. `export` **rechaza** (código 4, sin escribir) un `seed.sql`
     cuya secuencia de ids autoincrementales no sea contigua `1..N` (huecos por
@@ -40,10 +49,12 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     `synthdb export RUTA.sql -c config.yaml --format sql -o seed.sql` escriben los
     datos; ambos aceptan `--dry-run` (plan + 10 filas/tabla, sin escribir nada).
     Códigos de salida coherentes con `analyze` (0/1/2/3) más `4` para
-    `PlanError`/`ConfigError` y `5` para `on_error=abort`; la cuarentena no vacía
-    se informa siempre (tabla, filas, primer motivo). La CLI nunca vuelca un
-    traceback: los errores no previstos se presentan como mensaje accionable
-    (código 4).
+    `PlanError`/`ConfigError`/`EmitPathError`/`ExportIntegrityError` y `5` para
+    `on_error=abort`; la cuarentena no vacía se informa siempre, exactamente una
+    vez (tabla, filas, primer motivo), incluso si un error posterior a generar
+    aborta la escritura. La CLI nunca vuelca un traceback: los errores no
+    previstos se presentan como mensaje accionable; los errores de E/S al
+    escribir usan código 3.
   - **Reproducibilidad (T2.16).** Test con hashes SHA-256 golden por CSV del
     fixture `inmobiliaria` (mismo régimen que los snapshots) y test de dos
     generaciones byte-idénticas en el mismo proceso.

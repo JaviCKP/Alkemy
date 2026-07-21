@@ -263,9 +263,11 @@ configuración ⇒ mismos bytes ([ADR-006](adr/006-semillas-jerarquicas.md)).
 - **La reparación selectiva es del Hito 4.** En el H2, una fila que no pasa la
   validación pre-emisión va a **cuarentena** (con `on_error: quarantine`) o
   aborta la ejecución (`on_error: abort`, código 5); no se regenera. La cuarentena
-  se informa siempre al final y **no se emite** (los archivos solo contienen filas
-  válidas). `output.max_repair_retries` está declarado pero no tiene efecto hasta
-  el Hito 4.
+  se informa siempre, exactamente una vez, después de generar y también si una
+  escritura posterior falla; **no se emite** (los archivos solo contienen filas
+  válidas). En particular, `generate` CSV/JSON continúa con las filas aceptadas,
+  mientras `export` SQL rechaza con código 4 una secuencia `SERIAL` no contigua.
+  `output.max_repair_retries` está declarado pero no tiene efecto hasta el Hito 4.
 - **Sin base de datos todavía.** `generate` y `export` no se conectan a ningún
   motor; el `seed.sql` se valida sintácticamente y se carga en PostgreSQL en el
   test de integración, pero la inserción como parte del pipeline (`populate`,

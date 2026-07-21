@@ -25,13 +25,13 @@ terminal de 100 columnas.
 | `0` | Correcto (con o sin avisos). |
 | `1` | Error de sintaxis SQL (`ParseError`). |
 | `2` | Ciclo irrompible entre tablas (`UnbreakableCycle`). |
-| `3` | Archivo de esquema inexistente o ilegible. |
-| `4` | Error de plan o de configuración (`PlanError` / `ConfigError`), con el mensaje completo. |
+| `3` | Archivo de esquema inexistente o ilegible, o error de E/S al escribir la salida. |
+| `4` | Error de plan/configuración, colisión o contención de salida (`EmitPathError`), o `ExportIntegrityError`; se muestra la causa y la acción. |
 | `5` | Generación abortada por `output.on_error: abort` ante una fila inválida. |
 
-La **cuarentena** no vacía se informa **siempre** (tabla, nº de filas y primer
-motivo), una sola vez, tanto si el comando termina con éxito como si falla
-después de generar. Con `on_error: quarantine`, `generate` (CSV/JSON) aparta las
+La **cuarentena** no vacía se informa **siempre**, exactamente una vez (tabla, nº
+de filas y primer motivo), tanto si el comando termina con éxito como si falla
+después de generar o al escribir. Con `on_error: quarantine`, `generate` (CSV/JSON) aparta las
 filas inválidas y termina con **éxito** (código 0): cada fila lleva su id en la
 propia celda, así que un hueco no rompe nada. **`export --format sql` es más
 estricto**: si la cuarentena deja un hueco en la secuencia de una columna
@@ -190,9 +190,8 @@ Escrito seed.sql (76006 bytes).
 - `INSERT` multi-fila por lotes (`output.batch_size`), con las columnas en el
   orden del esquema. Las columnas autoincrementales (`SERIAL`) se **omiten**: las
   asigna la base de datos.
-- Los literales escalares se renderizan con el generador de expresiones de
-  sqlglot (comillas y backslashes escapados por la librería); nunca
-  concatenación ni escapado SQL artesanal. Un array (vacío o no) se emite
+- Los literales escalares se construyen con el generador de expresiones de
+  sqlglot, que escapa el literal SQL exterior. Un array (vacío o no) se emite
   como un único literal de texto sin tipar en el formato nativo de arrays de
   PostgreSQL (`'{}'`, `'{a,b}'`, `'{"a,b","c\"d"}'`...) —nunca
   `ARRAY[...]`—, así PostgreSQL lo resuelve contra el tipo real de la columna

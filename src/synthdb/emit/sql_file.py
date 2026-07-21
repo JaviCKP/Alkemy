@@ -7,24 +7,20 @@ produce un script cargable en un PostgreSQL que ya tenga el esquema creado
 
 Garantías del archivo (criterios del Hito 2 y CLAUDE.md):
 
-- **Los literales ESCALARES se renderizan con el generador de expresiones de
-  sqlglot** (`exp.Literal`, `exp.null/true/false`, dialecto `postgres`): sqlglot
-  dobla las comillas simples de las cadenas y las dobles de los identificadores.
-  Jamás se concatena SQL a mano ni se escapa una comilla artesanalmente.
-- **Los ARRAYS** (vacíos o no) se emiten como **un único literal de texto** en el
-  formato nativo de arrays de PostgreSQL (`'{}'`, `'{a,b}'`, `'{"a,b","c\"d"}'`),
-  no con el constructor `ARRAY[...]` ni un `CAST`. Dos niveles de escapado, ambos
-  deterministas y sin invención propia: (1) el CONTENIDO del array se codifica
-  según el formato documentado de PostgreSQL (§8.15.2, «Array Value Input») —cada
-  elemento que contenga coma, llave, comilla doble, backslash o espacio, o que sea
-  el literal `NULL`, se entrecomilla con `"..."` doblando `\\`/`"`—, y (2) el
-  literal SQL exterior que envuelve todo el array lo sigue escapando **sqlglot**
-  (`exp.Literal.string`), que dobla las comillas simples. La razón de no usar
-  `ARRAY[...]`: ese constructor resuelve su tipo a `text[]` a partir de sus
-  elementos ANTES de que el contexto de la columna intervenga, y falla al
-  asignarse a un array cuyo tipo no sea `text[]` (p. ej. `enum[]`); un literal de
-  texto sin tipar, en cambio, PostgreSQL lo resuelve contra el tipo real de la
-  columna destino. Verificado con round-trip contra PostgreSQL real en CI.
+- **Los literales escalares** se construyen como expresiones de sqlglot
+  (`exp.Literal`, `exp.null/true/false`, dialecto `postgres`). sqlglot escapa el
+  literal SQL exterior: dobla las comillas simples de las cadenas y las dobles
+  de los identificadores.
+- **Los arrays** (vacíos o no) se emiten como un único literal de texto en el
+  formato nativo de arrays de PostgreSQL (`'{}'`, `'{a,b}'`, `'{"a,b","c\"d"}'`).
+  El contenido de cada elemento se codifica según §8.15.2, «Array Value Input»:
+  comas, llaves, comillas dobles, backslashes, espacios, cadena vacía y el
+  texto `NULL` se protegen dentro del array, mientras que un `None` real queda
+  como elemento SQL `NULL`. Después, sqlglot escapa el literal SQL exterior que
+  envuelve ese texto. Así PostgreSQL resuelve el array contra el tipo real de la
+  columna destino, incluidos `enum[]`, sin que el emisor tenga que reconstruir
+  el nombre del tipo. El round-trip de todos los tipos soportados se verifica
+  contra PostgreSQL real en CI.
 - **Orden de fases estricto.** Cada `Phase` del plan se emite en orden: los
   `INSERT` de una `InsertPhase`/`InsertLeveledPhase`/`DeferredPhase` y, después,
   la `UpdatePhase` que cierra un ciclo (columnas insertadas a `NULL` y luego
@@ -247,7 +243,15 @@ def _quote_array_element(text: str) -> str:
 
 
 def _array_element_text(value: Any) -> str:
-    """Representación de un elemento (no `None`) en el formato de array de PostgreSQL."""
+    """Representa un elemento en el formato de texto nativo de PostgreSQL.
+
+    `None` es un elemento SQL `NULL` (sin comillas). Los objetos y listas se
+    serializan como JSON compacto antes de aplicar el escapado del formato de
+    arrays; esto conserva JSON anidado en columnas `json[]` en vez de usar la
+    representación Python con comillas simples.
+    """
+    if value is None:
+        return "NULL"
     if isinstance(value, bool):  # antes que int: bool es subclase de int
         return "true" if value else "false"
     if isinstance(value, int):
@@ -260,8 +264,10 @@ def _array_element_text(value: Any) -> str:
         return _quote_array_element(value.isoformat())
     if isinstance(value, bytes | bytearray):
         return _quote_array_element("\\x" + bytes(value).hex())
-    if isinstance(value, dict):
-        return _quote_array_element(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    if isinstance(value, dict | list | tuple):
+        return _quote_array_element(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
     if isinstance(value, str):
         return _quote_array_element(value)
     return _quote_array_element(str(value))
@@ -270,30 +276,12 @@ def _array_element_text(value: Any) -> str:
 def _literal(value: Any) -> exp.Expression:
     r"""Construye la expresión sqlglot del valor de una celda.
 
-    Todo pasa por `exp.*`; no hay una sola concatenación de SQL a mano.
-
-    Un array (vacío o no) se emite como UN ÚNICO literal de texto con la
-    representación textual nativa de PostgreSQL (`'{}'`, `'{a,b}'`,
-    `'{"a,b","c\\"d"}'`...), SIN `CAST` ni el constructor `ARRAY[...]`
-    (revisión PR #42, hallazgo 4). Antes, un array vacío se envolvía en
-    `CAST(ARRAY[] AS TEXT[])` y uno no vacío usaba `ARRAY[elem, ...]` con cada
-    elemento como su propio literal: ambos son correctos para una columna
-    `TEXT[]`, pero SILENCIOSAMENTE INCORRECTOS para cualquier columna cuyo
-    tipo de array no sea literalmente `text[]` -un array de ENUM (`mood[]`),
-    mismo `DATE[]` o `JSON[]`-. La causa, verificada contra PostgreSQL real en
-    CI: el constructor `ARRAY[...]` resuelve su propio tipo a partir de sus
-    elementos (`text[]` para literales de cadena) ANTES de que el contexto de
-    la columna destino del `INSERT`/`UPDATE` pueda intervenir, así que
-    PostgreSQL intenta un cast de asignación `text[]` → tipo real de la
-    columna que en general no existe (p. ej. no hay `text[]` → `mood_enum[]`).
-    Un literal de texto PLANO (`'{...}'`, sin `ARRAY[]` alrededor) no tiene
-    ese problema: como CUALQUIER literal de cadena sin tipar de este emisor
-    (`exp.Literal.string`), PostgreSQL lo resuelve directamente contra el tipo
-    de la columna destino -el mismo mecanismo que ya usa cualquier valor
-    escalar de enum-, sin necesidad de nombrar el tipo. Esto evita además
-    tener que ampliar la IR congelada (ADR-003) con el nombre del `CREATE
-    TYPE` original del enum, que hoy no se conserva (`ColumnSpec.enum_values`
-    solo guarda las etiquetas).
+    Los escalares pasan por la expresión correspondiente de sqlglot. Un array
+    se convierte primero a su representación textual nativa de PostgreSQL y
+    ese texto completo se entrega a `exp.Literal.string`; el contenido interno
+    y el literal SQL exterior son, por tanto, dos capas de escapado distintas.
+    El literal sin tipo permite que PostgreSQL lo resuelva contra la columna de
+    destino, también cuando el elemento es un enum o un tipo con sintaxis propia.
     """
     if value is None:
         return exp.null()
