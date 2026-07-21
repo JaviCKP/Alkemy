@@ -45,18 +45,16 @@ def _fixture(name: str) -> str:
     return str(_SCHEMAS_DIR / f"{name}.sql")
 
 
-def test_there_are_exactly_twelve_fixtures() -> None:
-    # Guarda de que el parametrizado de abajo cubre de verdad LOS 12 fixtures
-    # y no un subconjunto por un glob que se quedó corto. El 11º, crm_real_minimo,
-    # llegó con ADR-004 (patrones del primer esquema real); el 12º,
-    # fk_unique_target, con la revisión de la sesión E (hallazgo 3: FK que
-    # referencia una UNIQUE distinta de la PK).
-    assert len(_FIXTURES) == 12
+def test_there_are_exactly_fourteen_fixtures() -> None:
+    # Guarda de que el parametrizado de abajo cubre de verdad LOS 14 fixtures
+    # y no un subconjunto por un glob que se quedó corto. Los dos últimos son
+    # las variantes UUID de la autorreferencia compuesta multi-tenant de #44.
+    assert len(_FIXTURES) == 14
 
 
 @pytest.mark.parametrize("fixture", _FIXTURES)
 def test_analyze_over_every_fixture_exits_with_its_code(fixture: str) -> None:
-    # analyze sobre los 12 fixtures: 11 terminan el pipeline (exit 0) y
+    # analyze sobre los 14 fixtures: 13 terminan el pipeline (exit 0) y
     # ciclos_unbreakable se detiene con diagnóstico (exit 2).
     result = _analyze(_fixture(fixture))
     expected = 2 if fixture == _UNBREAKABLE else 0

@@ -93,6 +93,29 @@ def test_not_null_non_deferrable_self_reference_forces_roots_to_point_to_self_an
     assert "manager_id" in warning
 
 
+def test_partially_nullable_composite_self_reference_uses_match_simple_roots() -> None:
+    phases, plan = _resolve_fixture("multitenant_autoref")
+
+    assert isinstance(phases[-1], InsertLeveledPhase)
+    assert phases[-1] == InsertLeveledPhase(
+        table="offers", self_fk_columns=["tenant_id", "previous_id"]
+    )
+    assert plan.warnings == []
+
+
+def test_composite_not_null_self_reference_keeps_roots_pointing_to_self() -> None:
+    phases, plan = _resolve_fixture("multitenant_autoref_notnull")
+
+    assert isinstance(phases[-1], InsertLeveledPhase)
+    assert phases[-1] == InsertLeveledPhase(
+        table="offers",
+        self_fk_columns=["tenant_id", "previous_id"],
+        roots_point_to_self=True,
+    )
+    assert len(plan.warnings) == 1
+    assert "offers" in plan.warnings[0]
+
+
 def test_deferrable_self_reference_is_deferred() -> None:
     sql = """
         CREATE TABLE empleados (

@@ -548,6 +548,13 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- Issue #44: las autorreferencias compuestas multi-tenant se generan por niveles
+  usando `nullable_columns` bajo `MATCH SIMPLE`/`MATCH FULL`; las FKs no
+  autorreferentes se asignan antes de la jerarquía, comparten restricciones de
+  tenant sin sobrescrituras incompatibles y producen errores accionables cuando
+  falta un padre obligatorio compatible. Se añaden fixtures UUID y regresiones
+  de niveles, cuarentena y determinismo por `batch_size`.
+
 - Tercera revisión de PR #40: `numeric_range` mantiene en `Decimal` las cotas y
   la rejilla de `NUMERIC(p, s)` hasta la cuantización final, evitando el
   subdesbordamiento de `scale_step` en escalas grandes y preservando el contexto
