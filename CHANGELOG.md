@@ -8,6 +8,45 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- H2 Sesión F (T2.14+T2.15+T2.16+T2.17, #41) — **emisores, CLI de generación y
+  cierre del Hito 2**. Conecta el `Dataset` del motor con salidas reproducibles y
+  con la CLI pública `plan`/`generate`/`export`:
+  - **Emisores (`src/synthdb/emit/`, T2.14).** Protocolo `Sink` mínimo
+    (`write_table`/`finalize`, `base.py`) preparado para el emisor de BD del H4.
+    `csv_json.py` emite un CSV y un JSON por tabla en UTF-8, con el orden de
+    columnas del esquema, `NULL` como campo vacío (CSV) o `null` (JSON), arrays
+    como JSON en la celda o lista nativa, y terminador `\n` fijo (reproducibilidad
+    multiplataforma). `sql_file.py` emite un `seed.sql` de PostgreSQL dirigido por
+    las fases del plan: `INSERT` multi-fila por lotes, `UpdatePhase` como `UPDATE`
+    tras sus `INSERT`, `BEGIN`/`COMMIT` por fase y `SET CONSTRAINTS ALL DEFERRED`
+    en los ciclos diferibles. **Todos los literales se renderizan con el generador
+    de expresiones de sqlglot** (`exp.Literal`/`exp.Array`, dialecto postgres;
+    array vacío como `CAST(ARRAY[] AS ...[])`), nunca por concatenación —barrera
+    anti-inyección—; se omiten las columnas autoincrementales, se cualifican los
+    nombres con esquema y se entrecomillan los identificadores solo cuando el
+    plegado de PostgreSQL lo exige.
+  - **CLI (T2.15).** `synthdb plan RUTA.sql [-c config.yaml] [--json] [--no-llm]`
+    muestra el plan por columna (generador/fuente/confianza/reglas/avisos) y las
+    fases (`--no-llm` declarado como no-op hasta el H3; `--json` determinista).
+    `synthdb generate RUTA.sql -c config.yaml -o DIR [--format csv|json]` y
+    `synthdb export RUTA.sql -c config.yaml --format sql -o seed.sql` escriben los
+    datos; ambos aceptan `--dry-run` (plan + 10 filas/tabla, sin escribir nada).
+    Códigos de salida coherentes con `analyze` (0/1/2/3) más `4` para
+    `PlanError`/`ConfigError` y `5` para `on_error=abort`; la cuarentena no vacía
+    se informa siempre (tabla, filas, primer motivo). La CLI nunca vuelca un
+    traceback: los errores no previstos se presentan como mensaje accionable
+    (código 4).
+  - **Reproducibilidad (T2.16).** Test con hashes SHA-256 golden por CSV del
+    fixture `inmobiliaria` (mismo régimen que los snapshots) y test de dos
+    generaciones byte-idénticas en el mismo proceso.
+  - **Documentación (T2.17).** `docs/cli.md` (los cuatro comandos con salidas
+    reales), `docs/configuration.md` (referencia del YAML con defaults de los
+    modelos Pydantic), [ADR-005](docs/adr/005-prioridades-del-fusor.md)
+    (prioridades del fusor) y [ADR-006](docs/adr/006-semillas-jerarquicas.md)
+    (semillas jerárquicas), sección «Generación» en `docs/limitations.md`, y
+    `README` actualizado. Test `@integration` que carga el `seed.sql` de
+    `crm_real_minimo` en un PostgreSQL real (0 FKs huérfanas).
+
 - H2 Sesión E (T2.11+T2.12+T2.13) — motor determinista en memoria con
   compilación previa de generadores y reglas, ejecución por fases/lotes,
   `KeyStore` y selectores de FK, `RowContext` con padres reales, costura

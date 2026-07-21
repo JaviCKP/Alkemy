@@ -12,9 +12,12 @@ Alcance del MVP: SynthDB solo promete resultados correctos para **PostgreSQL**.
 La CLI acepta `--dialect`, pero cualquier dialecto distinto de `postgres` no
 está validado y puede producir una IR incorrecta sin avisar.
 
-Estado a cierre del **Hito 1** (núcleo estructural: parseo, tipos, hash,
-interpretación de `CHECK`, grafo de dependencias y estrategias de ciclo). La
-generación e inserción de datos llega en hitos posteriores.
+Estado a cierre del **Hito 2** (generación determinista sin LLM). El núcleo
+estructural del Hito 1 (parseo, tipos, hash, interpretación de `CHECK`, grafo de
+dependencias y estrategias de ciclo) se completa con el motor de generación, la
+validación pre-emisión y los emisores CSV/JSON/SQL; ver la sección
+[Generación](#generación). La capa semántica con LLM llega en el Hito 3 y la
+inserción transaccional en base de datos, con reparación, en el Hito 4.
 
 ---
 
@@ -203,3 +206,62 @@ salidas que ofrece el diagnóstico:
 2. Marcarla `DEFERRABLE INITIALLY DEFERRED`.
 3. `--allow-ddl` para desactivar y reactivar la constraint durante la carga
    (desaconsejado; nunca es el comportamiento por defecto).
+
+---
+
+## Generación
+
+El Hito 2 genera datos **deterministas y estructuralmente válidos** en memoria y
+los emite a CSV, JSON y `seed.sql` (PostgreSQL), sin tocar ninguna base de datos
+(la inserción transaccional es el Hito 4). Misma semilla + mismo esquema + misma
+configuración ⇒ mismos bytes ([ADR-006](adr/006-semillas-jerarquicas.md)).
+
+### Qué genera el MVP
+
+- Un generador por columna según la cadena de prioridad usuario > IR > heurística
+  > fallback ([ADR-005](adr/005-prioridades-del-fusor.md); el LLM entra en el H3).
+- Tipos escalares (enteros, `numeric`, texto, fechas, booleanos, enums…),
+  respetando enum/`CHECK`/`NOT NULL`/`UNIQUE` y las cotas derivadas.
+- Claves foráneas con estrategias `uniform`/`zipf`/`unique_subset`/`quota`,
+  ciclos (anulables y diferibles), autorreferencias por niveles y tablas puente
+  sin pares repetidos.
+- Reglas del mini-DSL por fila (cotas y derivaciones; ver [dsl.md](dsl.md)).
+- Arrays de PostgreSQL (ver el límite abajo).
+
+### Límites reales (demostrados en el código)
+
+- **Arrays de longitud 0–5, uniforme.** El motor envuelve el generador del
+  elemento en un array de longitud aleatoria **entre 0 y 5** (fija, no
+  configurable): `generation/engine.py::_generate_value`. Los elementos nunca son
+  `NULL` (el `null_ratio` aplica a la celda entera, no a cada elemento). No hay
+  control de la distribución de longitud ni de arrays multidimensionales.
+- **`sum_over_group` y las reglas de conjunto quedan para la v1.0.** El mini-DSL
+  del MVP cubre cotas y derivaciones **por fila**; repartir un total entre las
+  filas hijas de un mismo padre (`sum_over_group`) exige agregación entre filas y
+  se implementará junto con la reparación selectiva. Las reglas de ejemplo que lo
+  usaban se eliminaron con una nota «v1.0».
+- **Rango temporal por defecto fijo: 2015–2025.** El generador `datetime_range`
+  usa esa década fija cuando no se le dan cotas (para no depender de
+  `datetime.now()` y conservar el determinismo). Una regla que derive una cota de
+  fecha **fuera** de ese rango (p. ej. `fecha >= date(2026, 1, 1)`) produce un
+  rango imposible y `generate`/`export` terminan con un error accionable
+  (código 4), no con una fila inválida. Solución: fija un `datetime_range` con
+  `min`/`max` explícitos en la columna, o ajusta la regla.
+- **Continuidad de `SERIAL` en el `seed.sql`.** El emisor SQL omite las columnas
+  autoincrementales del `INSERT` (las asigna la base de datos). Para un dataset
+  **sin cuarentena**, la secuencia de PostgreSQL reproduce exactamente los ids que
+  usó el motor (1, 2, 3…) y las FKs cuadran. Si hay filas en cuarentena en una
+  tabla con `SERIAL`, sus ids dejan huecos y los de la secuencia podrían no
+  coincidir con las FKs del `seed.sql`: para esos casos, el emisor de base de
+  datos del Hito 4 traduce los ids explícitamente. Los CSV/JSON no tienen este
+  matiz (llevan el id generado en la propia fila).
+- **La reparación selectiva es del Hito 4.** En el H2, una fila que no pasa la
+  validación pre-emisión va a **cuarentena** (con `on_error: quarantine`) o
+  aborta la ejecución (`on_error: abort`, código 5); no se regenera. La cuarentena
+  se informa siempre al final y **no se emite** (los archivos solo contienen filas
+  válidas). `output.max_repair_retries` está declarado pero no tiene efecto hasta
+  el Hito 4.
+- **Sin base de datos todavía.** `generate` y `export` no se conectan a ningún
+  motor; el `seed.sql` se valida sintácticamente y se carga en PostgreSQL en el
+  test de integración, pero la inserción como parte del pipeline (`populate`,
+  validación posterior, `report.json`) es el Hito 4.

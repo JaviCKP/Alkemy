@@ -8,23 +8,47 @@ No hay paquete publicado todavía; este repositorio sigue el [plan de ejecución
 
 ## Estado actual
 
-El núcleo estructural (Hito 1) ya funciona de punta a punta y se puede inspeccionar con la CLI. `synthdb analyze` parsea un esquema de PostgreSQL a la IR, interpreta los `CHECK` que caen en su subconjunto, planifica el orden de generación (fases, ciclos y autorreferencias) y lo presenta — **sin generar todavía ningún dato**:
+Al cierre del **Hito 2**, SynthDB ya **genera datos deterministas sin LLM** y los
+emite a CSV, JSON y `seed.sql` de PostgreSQL, además de la inspección estructural
+del Hito 1. Cuatro comandos, todos sobre un `schema.sql` (ver [docs/cli.md](docs/cli.md)
+y [docs/configuration.md](docs/configuration.md)):
 
 ```bash
-uv run synthdb analyze tests/schemas/inmobiliaria.sql
+uv run synthdb analyze  tests/schemas/inmobiliaria.sql
+uv run synthdb plan     tests/schemas/inmobiliaria.sql -c config.yaml
+uv run synthdb generate tests/schemas/inmobiliaria.sql -c config.yaml -o out/ --format csv
+uv run synthdb export   tests/schemas/inmobiliaria.sql -c config.yaml --format sql -o seed.sql
 ```
 
-Por cada tabla muestra sus columnas (tipo canónico, nulabilidad, default), claves y restricciones, y los `CHECK` interpretados con sus cotas; después, las fases de generación en orden y todos los avisos agrupados por origen. Con `--json` vuelca el mismo análisis en forma serializable y determinista, y `--dialect` fija el dialecto del parser (el MVP solo valida PostgreSQL).
+- **`analyze`** parsea el esquema a la IR, interpreta los `CHECK`, planifica las
+  fases y muestra columnas, claves, restricciones, fases y avisos, sin generar
+  nada.
+- **`plan`** muestra el plan de generación por columna (generador, fuente,
+  confianza, reglas, avisos) y las fases.
+- **`generate`** escribe un CSV o JSON por tabla, respetando el orden de columnas,
+  con `NULL` como campo vacío y arrays serializados.
+- **`export`** escribe un `seed.sql` cargable en PostgreSQL con `psql`: `INSERT`
+  multi-fila por fases, `UPDATE` para cerrar ciclos, literales renderizados con
+  sqlglot (sin escapado artesanal).
 
-Códigos de salida: `0` correcto (con o sin avisos), `1` error de sintaxis, `2` ciclo irrompible, `3` archivo inexistente o ilegible.
+`generate` y `export` aceptan `--dry-run` (ejecutan el pipeline, muestran el plan
+y 10 filas por tabla, y no escriben nada). Misma semilla ⇒ misma salida byte a
+byte. Códigos de salida: `0` correcto, `1` sintaxis, `2` ciclo irrompible, `3`
+archivo ilegible, `4` error de plan/configuración, `5` generación abortada.
 
-Qué DDL se soporta hoy, qué construcciones generan un aviso en vez de fallar y qué subconjunto de `CHECK` se interpreta está en [docs/limitations.md](docs/limitations.md). La generación e inserción de datos (motor, generadores y compilador semántico LLM) llega en hitos posteriores.
+Qué DDL se soporta, qué genera hoy el motor y qué queda fuera (arrays 0–5,
+`sum_over_group` v1.0, reparación en el Hito 4…) está en
+[docs/limitations.md](docs/limitations.md). La capa semántica con LLM y la
+inserción transaccional en base de datos llegan en los Hitos 3 y 4.
 
 ## Documentación
 
+- [Guía de la CLI](docs/cli.md) — `analyze`, `plan`, `generate` y `export`, con salidas reales.
+- [Referencia de configuración](docs/configuration.md) — el `config.yaml`, opción por opción.
+- [Mini-DSL de reglas](docs/dsl.md) — gramática de las reglas por fila.
 - [Especificación técnica](especificacion.md) — arquitectura, IR, algoritmo de planificación, contrato con el LLM, riesgos y alcance.
 - [Plan de ejecución del MVP](plan-ejecucion-mvp.md) — hitos, tareas, calendario y checklist de release.
-- [Limitaciones conocidas](docs/limitations.md) — qué DDL y qué `CHECK` se soportan hoy, y qué genera un aviso.
+- [Limitaciones conocidas](docs/limitations.md) — qué DDL y qué `CHECK` se soportan hoy, qué genera el motor y qué queda fuera.
 - [ADRs](docs/adr/) — decisiones de diseño no triviales, una por archivo.
 
 ## Licencia
