@@ -87,6 +87,18 @@ def test_json_is_utf8(tmp_path: Path) -> None:
     assert "café ñ".encode() in raw
 
 
+def test_json_has_fixed_newline_even_on_windows(tmp_path: Path) -> None:
+    # Revisión PR #42, hallazgo 6: json.dumps(indent=2) produce muchos '\n'
+    # entre líneas; Path.write_text sin newline="" los traduciría a '\r\n' en
+    # Windows (modo texto por defecto), rompiendo la reproducibilidad byte a
+    # byte entre plataformas. JsonSink escribe bytes UTF-8 directos.
+    JsonSink(tmp_path).write_table(_table(), _ROWS)
+    raw = (tmp_path / "t.json").read_bytes()
+    assert b"\r\n" not in raw
+    assert raw.endswith(b"\n")
+    assert raw.count(b"\n") > 1  # el JSON indentado SÍ tiene varias líneas
+
+
 def test_sink_paths_are_recorded(tmp_path: Path) -> None:
     sink = CsvSink(tmp_path)
     sink.write_table(_table(), _ROWS)

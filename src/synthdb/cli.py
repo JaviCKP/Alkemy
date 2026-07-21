@@ -49,7 +49,7 @@ from rich.text import Text
 from synthdb.config.loader import ConfigError, load_config
 from synthdb.config.models import Config
 from synthdb.constraints.check_interp import interpret_checks
-from synthdb.emit import generate_files, render_sql
+from synthdb.emit import ExportIntegrityError, generate_files, render_sql
 from synthdb.generation.engine import Dataset, GenerationError, generate_dataset
 from synthdb.generation.engine import PlanError as EnginePlanError
 from synthdb.graph.dependency import analyze_structure
@@ -190,6 +190,25 @@ def _read_sql(path: Path, stderr: Console) -> str:
             markup=False,
         )
         raise typer.Exit(_EXIT_IO_ERROR) from exc
+
+
+def _io_error_message(exc: OSError | UnicodeError, path: Path) -> str:
+    """Mensaje accionable de un fallo al escribir en `path` (mismo código 3 que `_read_sql`).
+
+    Cubre `generate`/`export` (revisión PR #42, hallazgo 5): `--out` apunta a
+    un archivo ya existente en vez de un directorio (`FileExistsError`/
+    `NotADirectoryError` al crearlo), su directorio padre no existe o no se
+    puede crear, los permisos deniegan la escritura, o la propia escritura
+    falla (disco lleno, ruta demasiado larga...). `UnicodeError` se cubre por
+    homogeneidad con `_read_sql`, aunque en la práctica no debería producirse
+    escribiendo UTF-8 desde cadenas Python ya válidas.
+    """
+    detail = getattr(exc, "strerror", None) or str(exc)
+    return (
+        f"No se pudo escribir en {str(path)!r}: {detail}. Comprueba que la ruta no exista ya "
+        "como un archivo (o como un directorio, según el caso), que su directorio padre se "
+        "pueda crear, y los permisos de escritura."
+    )
 
 
 def _json_payload(spec: SchemaSpec, phases: list[Phase], warnings: list[str]) -> str:
@@ -504,7 +523,11 @@ def generate(
         _report_quarantine(spec, dataset, stderr)
         return
 
-    paths = generate_files(spec, dataset, out_dir, fmt)
+    try:
+        paths = generate_files(spec, dataset, out_dir, fmt)
+    except (OSError, UnicodeError) as exc:
+        stderr.print(_io_error_message(exc, out_dir), markup=False)
+        raise typer.Exit(_EXIT_IO_ERROR) from exc
     console.print(f"Escritos {len(paths)} archivo(s) {fmt.upper()} en {out_dir}:", markup=False)
     for written in paths:
         console.print(f"  {written}", markup=False)
@@ -575,14 +598,38 @@ def export(
         _report_quarantine(spec, dataset, stderr)
         return
 
-    script = render_sql(spec, dataset, config)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(script, encoding="utf-8")
+    script = _render_sql_or_exit(spec, dataset, config, stderr)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # `write_bytes`, no `write_text`: `script` lleva `\n` entre sentencias
+        # y `Path.write_text` sin `newline=""` los traduciría a `\r\n` en
+        # Windows, rompiendo la reproducibilidad byte a byte (revisión PR
+        # #42, hallazgo 6).
+        out.write_bytes(script.encode("utf-8"))
+    except (OSError, UnicodeError) as exc:
+        stderr.print(_io_error_message(exc, out), markup=False)
+        raise typer.Exit(_EXIT_IO_ERROR) from exc
     console.print(f"Escrito {out} ({len(script)} bytes).", markup=False)
     _report_quarantine(spec, dataset, stderr)
 
 
 # --- Ayudantes compartidos de los comandos de generación --------------------
+
+
+def _render_sql_or_exit(spec: SchemaSpec, dataset: Dataset, config: Config, stderr: Console) -> str:
+    """Renderiza el `seed.sql` o sale con código 4 si el `Dataset` no es exportable.
+
+    `render_sql` puede rechazar un `Dataset` con cuarentena en una tabla
+    autoincremental (`ExportIntegrityError`): cargarlo desalinearía la
+    secuencia `SERIAL` de PostgreSQL frente a los ids que el `Dataset` en
+    memoria registró. Se reporta sin traceback, con el mensaje completo (tabla,
+    columna y causa) que ya construye `render_sql`.
+    """
+    try:
+        return render_sql(spec, dataset, config)
+    except ExportIntegrityError as exc:
+        stderr.print(str(exc), markup=False)
+        raise typer.Exit(_EXIT_PLAN_OR_CONFIG_ERROR) from exc
 
 
 def _parse_or_exit(sql: str, dialect: str, stderr: Console) -> SchemaSpec:

@@ -21,7 +21,9 @@ import pytest
 
 from synthdb.config.models import Config, TableConfig
 from synthdb.emit import render_sql
-from synthdb.generation.engine import generate_dataset
+from synthdb.generation.engine import Dataset, generate_dataset
+from synthdb.ir.plans import InsertPhase
+from synthdb.ir.schema import ColumnSpec, SchemaSpec, TableSpec, TypeSpec
 from synthdb.parsing.ddl import parse_ddl
 
 psycopg = pytest.importorskip("psycopg")
@@ -107,3 +109,150 @@ def test_crm_seed_sql_loads_into_postgres_without_violations() -> None:
 
         with connection.cursor() as cursor:
             cursor.execute("DROP TABLE IF EXISTS clientes, matches, inmobiliarias CASCADE")
+
+
+# --- Seguridad (revisión PR #42): inyección vía comentarios, con Postgres real ---
+
+
+@pytest.mark.integration
+def test_table_name_with_newline_cannot_inject_sql_into_postgres() -> None:
+    """Tabla centinela: demuestra en PostgreSQL real que el `seed.sql`
+    generado para una tabla con un salto de línea en el nombre NO ejecuta la
+    carga inyectada (hallazgo 1 de la revisión del PR #42).
+
+    Sin el saneado de `_sanitize_comment_text`, el comentario
+    `-- INSERT: x\nDROP TABLE victims; --` se habría partido en dos líneas
+    SQL: la segunda, `DROP TABLE victims; --`, no lleva prefijo `--` y
+    ejecutaría de verdad. La tabla `victims` con una fila es el centinela que
+    demuestra que eso ya no ocurre.
+    """
+    url = os.environ.get("SYNTHDB_TEST_POSTGRES_URL")
+    if not url:
+        pytest.skip("SYNTHDB_TEST_POSTGRES_URL no está configurada")
+
+    evil_name = "x\nDROP TABLE victims; --"
+    schema = SchemaSpec(
+        dialect="postgres",
+        tables=[
+            TableSpec(
+                name=evil_name,
+                columns=[ColumnSpec(name="id", type=TypeSpec(kind="integer"), nullable=False)],
+                primary_key=["id"],
+            )
+        ],
+    )
+    dataset = Dataset(tables={evil_name: [{"id": 1}]}, phases=[InsertPhase(tables=[evil_name])])
+    seed_sql = render_sql(schema, dataset, Config())
+
+    quoted_evil_name = '"' + evil_name.replace('"', '""') + '"'
+    ddl = (
+        "CREATE TABLE victims (id INT PRIMARY KEY);"
+        "INSERT INTO victims (id) VALUES (1);"
+        f"CREATE TABLE {quoted_evil_name} (id INT PRIMARY KEY);"
+    )
+
+    with psycopg.connect(url, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS victims, {quoted_evil_name} CASCADE")
+            cursor.execute(ddl)
+
+        with connection.cursor() as cursor:
+            cursor.execute(seed_sql)  # el archivo generado, con el nombre malicioso
+
+        with connection.cursor() as cursor:
+            # La tabla centinela sigue existiendo con su fila: el DROP nunca
+            # se ejecutó como sentencia independiente.
+            cursor.execute("SELECT count(*) FROM victims")
+            assert cursor.fetchone()[0] == 1
+            # Y la fila sí se insertó en la tabla de nombre malicioso, prueba
+            # de que el INSERT real (con el identificador citado) funcionó.
+            cursor.execute(f"SELECT count(*) FROM {quoted_evil_name}")
+            assert cursor.fetchone()[0] == 1
+
+        with connection.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS victims, {quoted_evil_name} CASCADE")
+
+
+# --- Seguridad (revisión PR #42): arrays de enum en PostgreSQL real ---------
+
+
+@pytest.mark.integration
+def test_empty_and_non_empty_enum_arrays_load_into_postgres() -> None:
+    """`mood[]` (un array de un `CREATE TYPE ... AS ENUM`) vacío y no vacío,
+    con etiquetas que llevan comilla, coma, backslash y Unicode, cargan
+    correctamente (hallazgo 4 de la revisión del PR #42).
+
+    Antes, un array vacío se emitía como `CAST(ARRAY[] AS TEXT[])`: PostgreSQL
+    no convierte implícitamente `text[]` a un `enum[]` de usuario, así que
+    esa fila habría fallado con `column "tags" is of type mood_enum[] but
+    expression is of type text[]`. Ahora se emite como el literal de texto
+    `'{}'`, sin tipar, que PostgreSQL resuelve contra el tipo real de la
+    columna destino -el mismo mecanismo que ya usa cualquier valor escalar de
+    enum de este emisor-.
+    """
+    url = os.environ.get("SYNTHDB_TEST_POSTGRES_URL")
+    if not url:
+        pytest.skip("SYNTHDB_TEST_POSTGRES_URL no está configurada")
+
+    tricky_label = "has'quote,comma" + chr(92) + "backslash"
+    unicode_label = "café ñ 日本"
+
+    spec = SchemaSpec(
+        dialect="postgres",
+        tables=[
+            TableSpec(
+                name="moods",
+                columns=[
+                    ColumnSpec(
+                        name="id",
+                        type=TypeSpec(kind="integer", autoincrement=True),
+                        nullable=False,
+                    ),
+                    ColumnSpec(
+                        name="tags",
+                        type=TypeSpec(kind="enum", is_array=True),
+                        nullable=False,
+                        enum_values=["happy", "sad", tricky_label, unicode_label],
+                    ),
+                ],
+                primary_key=["id"],
+            )
+        ],
+    )
+    dataset = Dataset(
+        tables={
+            "moods": [
+                {"id": 1, "tags": []},
+                {"id": 2, "tags": ["happy"]},
+                {"id": 3, "tags": ["happy", "sad", tricky_label, unicode_label]},
+            ]
+        },
+        phases=[InsertPhase(tables=["moods"])],
+    )
+    seed_sql = render_sql(spec, dataset, Config())
+
+    ddl = (
+        "DROP TABLE IF EXISTS moods CASCADE; DROP TYPE IF EXISTS mood_enum;"
+        "CREATE TYPE mood_enum AS ENUM ("
+        "'happy', 'sad', 'has''quote,comma" + chr(92) + "backslash', 'café ñ 日本');"
+        "CREATE TABLE moods (id INT PRIMARY KEY, tags mood_enum[] NOT NULL);"
+    )
+
+    with psycopg.connect(url, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(ddl)
+            cursor.execute(seed_sql)  # antes del fix: fallaría en la fila 1 (array vacío)
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id, tags FROM moods ORDER BY id")
+            rows = cursor.fetchall()
+
+        with connection.cursor() as cursor:
+            cursor.execute("DROP TABLE moods CASCADE")
+            cursor.execute("DROP TYPE mood_enum")
+
+    assert rows == [
+        (1, []),
+        (2, ["happy"]),
+        (3, ["happy", "sad", tricky_label, unicode_label]),
+    ]

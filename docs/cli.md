@@ -186,7 +186,9 @@ Escrito seed.sql (76006 bytes).
   asigna la base de datos.
 - Todos los literales se renderizan con el generador de expresiones de sqlglot
   (comillas y backslashes escapados por la librería, arrays como `ARRAY[...]`,
-  arrays vacíos como `CAST(ARRAY[] AS ...[])`). No hay escapado artesanal.
+  arrays vacíos como el literal de texto `'{}'` sin tipar —así PostgreSQL lo
+  resuelve contra el tipo real de la columna destino, también para arrays de
+  `enum`, sin necesitar su nombre—). No hay escapado artesanal.
 - Los identificadores se entrecomillan **solo cuando el plegado de PostgreSQL lo
   exige** (mayúsculas, caracteres especiales o palabra reservada).
 

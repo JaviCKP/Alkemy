@@ -47,7 +47,7 @@ from synthdb.ir.plans import (
     InsertPhase,
     UpdatePhase,
 )
-from synthdb.ir.schema import ColumnSpec, SchemaSpec, TableSpec, TypeSpec
+from synthdb.ir.schema import ColumnSpec, SchemaSpec, TableSpec
 
 _DIALECT = "postgres"
 
@@ -55,6 +55,30 @@ _SAFE_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_$]*")
 """Identificador que PostgreSQL deja intacto sin comillas: minúsculas ASCII,
 dígitos, `_` y `$`, sin empezar por dígito. Cualquier otra forma (mayúsculas,
 espacios, acentos, símbolos) cambia al plegarse y por tanto exige comillas."""
+
+_LINE_BREAK_CHARS = re.compile("[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]")
+"""Todo carácter que Python (y por tanto un lector de texto ingenuo) trata como
+fin de línea: `\\r`, `\\n`, `\\v`, `\\f`, los separadores de registro/grupo
+(`\\x1c`-`\\x1e`), `NEL` (`\\x85`) y los separadores Unicode de línea/párrafo
+(`\\u2028`/`\\u2029`). Superconjunto deliberado de `str.splitlines()`."""
+
+
+def _sanitize_comment_text(text: str) -> str:
+    r"""Reemplaza cualquier terminador de línea por un espacio.
+
+    Los nombres de tabla/columna vienen de la IR (en última instancia, del
+    DDL) y viajan sin escapar dentro de comentarios `-- ...`: un nombre que
+    contenga un salto de línea podría cerrar el comentario e introducir una
+    línea SQL ejecutable (p. ej. una tabla llamada
+    ``"x\\nDROP TABLE victims; --"``). Los identificadores y literales reales
+    de los `INSERT`/`UPDATE` siempre pasan por sqlglot (`_ident`/`_literal`),
+    que sí es seguro frente a esto; esta función protege el único lugar del
+    archivo que interpola texto crudo: los comentarios informativos. Se aplica
+    en el único punto por el que pasan todos ellos (`_emit_transaction`), para
+    que ninguna llamada futura pueda olvidarlo.
+    """
+    return _LINE_BREAK_CHARS.sub(" ", text)
+
 
 _RESERVED_KEYWORDS: frozenset[str] = frozenset(
     {
@@ -186,43 +210,29 @@ def _qualified_table(table: TableSpec) -> str:
     return name
 
 
-def _element_type_sql(type_spec: TypeSpec) -> str:
-    """Tipo SQL del elemento de una columna (sin la dimensión de array).
-
-    Solo se usa para el `CAST` de un array **vacío** (`CAST(ARRAY[] AS TEXT[])`):
-    PostgreSQL no puede inferir el tipo de `ARRAY[]` a secas.
-    """
-    kind = type_spec.kind
-    if kind == "integer":
-        return {16: "SMALLINT", 32: "INTEGER", 64: "BIGINT"}.get(type_spec.bits or 32, "INTEGER")
-    if kind == "numeric":
-        if type_spec.precision is not None and type_spec.scale is not None:
-            return f"NUMERIC({type_spec.precision}, {type_spec.scale})"
-        if type_spec.precision is not None:
-            return f"NUMERIC({type_spec.precision})"
-        return "NUMERIC"
-    if kind == "varchar":
-        return f"VARCHAR({type_spec.length})" if type_spec.length else "VARCHAR"
-    if kind == "char":
-        return f"CHAR({type_spec.length})" if type_spec.length else "CHAR"
-    if kind == "timestamp":
-        return "TIMESTAMPTZ" if type_spec.with_timezone else "TIMESTAMP"
-    return {
-        "text": "TEXT",
-        "date": "DATE",
-        "boolean": "BOOLEAN",
-        "uuid": "UUID",
-        "json": "JSON",
-        "bytea": "BYTEA",
-        "enum": "TEXT",
-    }.get(kind, "TEXT")
-
-
 def _literal(value: Any, column: ColumnSpec) -> exp.Expression:
     """Construye la expresión sqlglot del valor de una celda.
 
-    Todo pasa por `exp.*`; no hay una sola concatenación de SQL a mano. Un array
-    vacío se envuelve en un `CAST` a su tipo para que PostgreSQL lo acepte.
+    Todo pasa por `exp.*`; no hay una sola concatenación de SQL a mano.
+
+    Un array **vacío** se emite como el literal de texto `'{}'` -la
+    representación textual nativa de PostgreSQL para un array vacío-, SIN
+    ningún `CAST` a un tipo explícito (revisión PR #42, hallazgo 4). Antes se
+    envolvía en `CAST(ARRAY[] AS TEXT[])`: eso es correcto para una columna
+    `TEXT[]`, pero SILENCIOSAMENTE INCORRECTO para una columna de un array de
+    ENUM (`mood[]`): la IR (`ColumnSpec.enum_values`, congelada por ADR-003)
+    conserva las ETIQUETAS del enum pero no el NOMBRE del tipo `CREATE TYPE`
+    original -se descarta ya en el parser, `parsing/ddl.py::_register_create_type`-,
+    así que no hay forma de nombrar el tipo real sin releer el DDL ni ampliar
+    la IR. `'{}'` evita el problema por completo: es un literal de texto SIN
+    tipar (igual que cualquier valor escalar de enum de este mismo emisor,
+    `exp.Literal.string(value)` más abajo), así que PostgreSQL lo resuelve
+    contra el tipo de la columna destino del `INSERT`/`UPDATE` -el mismo
+    mecanismo de coerción por contexto que ya usa cualquier valor escalar de
+    enum-, sin necesidad de nombrar el tipo. Un array NO vacío sigue usando el
+    constructor `ARRAY[...]`: sus elementos son igualmente literales sin tipar
+    hasta que el contexto los resuelve, por lo que el mismo mecanismo aplica
+    elemento a elemento.
     """
     if value is None:
         return exp.null()
@@ -242,7 +252,7 @@ def _literal(value: Any, column: ColumnSpec) -> exp.Expression:
         return exp.Literal.string(json.dumps(value, ensure_ascii=False, sort_keys=True))
     if isinstance(value, list):
         if not value:
-            return exp.cast(exp.Array(expressions=[]), f"{_element_type_sql(column.type)}[]")
+            return exp.Literal.string("{}")
         return exp.Array(expressions=[_literal(item, column) for item in value])
     if isinstance(value, str):
         return exp.Literal.string(value)
@@ -254,11 +264,67 @@ def _render_value(value: Any, column: ColumnSpec) -> str:
     return _literal(value, column).sql(dialect=_DIALECT)
 
 
+class ExportIntegrityError(ValueError):
+    """`render_sql` no puede producir un `seed.sql` íntegro para este `Dataset`."""
+
+
 def _insert_columns(table: TableSpec) -> list[ColumnSpec]:
     """Columnas que van en el `INSERT`: se omiten autoincrement y generadas."""
     return [
         column for column in table.columns if not column.type.autoincrement and not column.generated
     ]
+
+
+def _check_autoincrement_sequence(table: TableSpec, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Rechaza una tabla cuyos ids autoincrementales aceptados no son 1..N.
+
+    Las columnas autoincrementales se omiten del `INSERT` (`_insert_columns`):
+    la asigna la secuencia `SERIAL` de PostgreSQL, EN EL ORDEN de inserción, a
+    partir de 1. Con `Dataset` completo (sin cuarentena) eso reproduce
+    exactamente los ids que usó el motor (T2.14). Pero una fila apartada por
+    cuarentena dentro de una tabla con autoincrement deja un HUECO en el medio
+    (p. ej. `[1, 3, 4, 5]`: la fila 2 se apartó) — un `schema.sql` recién
+    cargado asignaría `[1, 2, 3, 4]` a esas MISMAS filas en su orden de
+    inserción, un valor distinto del que el `Dataset` en memoria registró. Eso
+    desalinea silenciosamente cualquier FK de otra tabla que sobreviviera
+    apuntando al id ORIGINAL (p. ej. una FK hacia el id `5`, que tras cargar
+    ya no existe: solo hay 4 filas) y también el propio `WHERE {pk} = …` de
+    una `UpdatePhase` sobre esta misma tabla.
+
+    No hay traducción general de claves aquí (esa es la responsabilidad del
+    emisor de BD del H4, con el mapa id_dataset→id_bd vía `RETURNING`):
+    revisión del PR #42, hallazgo 3. Aquí solo se detecta la contradicción,
+    ANTES de escribir una sola línea, y se rechaza con un error accionable en
+    vez de producir un `seed.sql` que violaría la integridad referencial al
+    cargarse en un PostgreSQL limpio.
+
+    Raises:
+        ExportIntegrityError: si alguna columna autoincremental de `table`
+            tiene, entre las filas aceptadas, un conjunto de valores que no es
+            exactamente `1..len(rows)` en ese orden.
+    """
+    if not rows:
+        return
+    for column in table.columns:
+        if not column.type.autoincrement:
+            continue
+        actual = [row.get(column.name) for row in rows]
+        expected = list(range(1, len(actual) + 1))
+        if actual == expected:
+            continue
+        preview = actual if len(actual) <= 10 else [*actual[:10], "…"]
+        raise ExportIntegrityError(
+            f"tabla {table.name}, columna {column.name}: los ids aceptados "
+            f"({preview}) no forman la secuencia contigua 1..{len(actual)} que "
+            "PostgreSQL asignaría a esta columna autoincremental al omitirla del "
+            "INSERT. Es señal de filas en cuarentena en esta tabla: cargar este "
+            "seed.sql reasignaría estos ids y dejaría colgando cualquier FK u "
+            "UPDATE que en el Dataset original apuntara a un id posterior al hueco. "
+            "No se puede exportar a SQL una tabla autoincremental con cuarentena; "
+            "usa --format csv/json (llevan el id en la propia fila, sin este "
+            "problema) o corrige los datos para que la tabla no quede en "
+            "cuarentena."
+        )
 
 
 def _value_tuple(
@@ -334,11 +400,16 @@ def _update_statements(
 def _emit_transaction(
     lines: list[str], statements: Sequence[str], *, comment: str, deferred: bool = False
 ) -> None:
-    """Añade una fase a `lines` envuelta en `BEGIN`/`COMMIT` (si tiene contenido)."""
+    """Añade una fase a `lines` envuelta en `BEGIN`/`COMMIT` (si tiene contenido).
+
+    `comment` puede incluir nombres de tabla arbitrarios (hallazgo de
+    seguridad, revisión PR #42): se sanea con `_sanitize_comment_text` antes de
+    interpolarse, único punto por el que pasa todo comentario del archivo.
+    """
     if not statements:
         return
     lines.append("")
-    lines.append(f"-- {comment}")
+    lines.append(f"-- {_sanitize_comment_text(comment)}")
     lines.append("BEGIN;")
     if deferred:
         lines.append("SET CONSTRAINTS ALL DEFERRED;")
@@ -358,8 +429,16 @@ def render_sql(spec: SchemaSpec, dataset: Dataset, config: Config) -> str:
 
     Returns:
         El script SQL completo como texto UTF-8, terminado en `\\n`.
+
+    Raises:
+        ExportIntegrityError: si alguna tabla con columna autoincremental
+            tiene, entre sus filas aceptadas, un hueco en la secuencia de ids
+            (típicamente por cuarentena) — ver `_check_autoincrement_sequence`.
+            Se comprueban TODAS las tablas antes de renderizar una sola línea.
     """
     by_name = {table.name: table for table in spec.tables}
+    for table in spec.tables:
+        _check_autoincrement_sequence(table, dataset.tables.get(table.name, []))
     batch_size = config.output.batch_size
     lines: list[str] = [
         "-- Generado por SynthDB (synthdb export --format sql).",

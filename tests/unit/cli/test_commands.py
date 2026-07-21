@@ -320,3 +320,156 @@ def test_export_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert not seed.exists()
     assert "Muestra" in result.output
+
+
+# --- Seguridad (revisión PR #42): cuarentena + SERIAL bloquea `export` -------
+
+
+def test_export_with_gapped_serial_sequence_exits_four_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reproducción end-to-end vía CLI del hallazgo 3: parent pierde su fila
+    # intermedia (id=2) por cuarentena; varios child sobreviven referenciando
+    # el id posterior al hueco (parent_id=3). export debe rechazarlo con
+    # código 4, sin traceback, y sin escribir ningún seed.sql.
+    schema_path = tmp_path / "schema.sql"
+    schema_path.write_text(
+        "CREATE TABLE parent (id SERIAL PRIMARY KEY, value INT NOT NULL);"
+        "CREATE TABLE child (id SERIAL PRIMARY KEY, parent_id INT NOT NULL "
+        "REFERENCES parent(id));",
+        encoding="utf-8",
+    )
+    cfg = _config(
+        tmp_path,
+        "seed: 7\n"
+        "tables:\n"
+        "  parent: {rows: 3}\n"
+        "  child: {rows: 6, fk: {parent_id: {strategy: uniform}}}\n",
+    )
+
+    def corrupt(batch: list[dict[str, Any]]) -> None:
+        for row in batch:
+            if "value" in row and row.get("id") == 2:
+                row["value"] = None
+
+    monkeypatch.setattr(engine, "complete_batch", corrupt)
+    seed = tmp_path / "seed.sql"
+    result = _invoke("export", str(schema_path), "-c", cfg, "--format", "sql", "-o", str(seed))
+
+    assert result.exit_code == 4, result.output
+    assert "Traceback" not in result.output
+    assert "parent" in result.output
+    assert not seed.exists()
+
+
+def test_generate_with_gapped_serial_sequence_still_writes_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # El mismo escenario que arriba no afecta a generate --format csv/json:
+    # cada fila lleva su id, así que no hay secuencia SERIAL que desalinear.
+    schema_path = tmp_path / "schema.sql"
+    schema_path.write_text(
+        "CREATE TABLE parent (id SERIAL PRIMARY KEY, value INT NOT NULL);"
+        "CREATE TABLE child (id SERIAL PRIMARY KEY, parent_id INT NOT NULL "
+        "REFERENCES parent(id));",
+        encoding="utf-8",
+    )
+    cfg = _config(
+        tmp_path,
+        "seed: 7\n"
+        "tables:\n"
+        "  parent: {rows: 3}\n"
+        "  child: {rows: 6, fk: {parent_id: {strategy: uniform}}}\n",
+    )
+
+    def corrupt(batch: list[dict[str, Any]]) -> None:
+        for row in batch:
+            if "value" in row and row.get("id") == 2:
+                row["value"] = None
+
+    monkeypatch.setattr(engine, "complete_batch", corrupt)
+    out = tmp_path / "out"
+    result = _invoke("generate", str(schema_path), "-c", cfg, "-o", str(out))
+
+    assert result.exit_code == 0, result.output
+    assert sorted(p.name for p in out.glob("*.csv")) == ["child.csv", "parent.csv"]
+
+
+# --- Seguridad (revisión PR #42): errores de E/S al escribir la salida ------
+
+
+def test_generate_out_pointing_to_an_existing_file_exits_three(tmp_path: Path) -> None:
+    # Reproducción del hallazgo 5: --out apunta a un archivo existente (no un
+    # directorio). mkdir(exist_ok=True) solo tolera un directorio existente,
+    # no un archivo: sin capturar, esto era un FileExistsError con traceback.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("contenido preexistente que no debe tocarse", encoding="utf-8")
+    result = _invoke(
+        "generate",
+        _fixture("ciclos_nullable"),
+        "-c",
+        _config(tmp_path, _CICLOS_CFG),
+        "-o",
+        str(blocker),
+    )
+    assert result.exit_code == 3, result.output
+    assert "Traceback" not in result.output
+    # Rich puede partir la ruta larga en cualquier punto (incluso a mitad de
+    # palabra) al ajustar el ancho de la consola; se compara sin NINGÚN
+    # espacio en blanco (ni espacios ni saltos de línea) para no depender de
+    # dónde cae el ajuste. El mensaje usa `repr(str(path))` (como `_read_sql`),
+    # que en Windows dobla cada backslash: se compara contra ese mismo repr.
+    no_whitespace = "".join(result.output.split())
+    assert "".join(repr(str(blocker)).split()) in no_whitespace
+    # El archivo preexistente no se tocó: ni se convirtió en directorio ni se
+    # sobrescribió su contenido.
+    assert blocker.is_file()
+    assert blocker.read_text(encoding="utf-8") == "contenido preexistente que no debe tocarse"
+
+
+def test_export_out_with_a_file_as_parent_directory_exits_three(tmp_path: Path) -> None:
+    # Analogía para export: --out cuyo directorio padre ya existe como un
+    # archivo (no se puede crear ese "directorio" para alojar seed.sql).
+    blocker = tmp_path / "blocker"
+    blocker.write_text("no soy un directorio", encoding="utf-8")
+    seed = blocker / "seed.sql"
+    result = _invoke(
+        "export",
+        _fixture("ciclos_nullable"),
+        "-c",
+        _config(tmp_path, _CICLOS_CFG),
+        "--format",
+        "sql",
+        "-o",
+        str(seed),
+    )
+    assert result.exit_code == 3, result.output
+    assert "Traceback" not in result.output
+    assert not seed.exists()
+    assert blocker.read_text(encoding="utf-8") == "no soy un directorio"
+
+
+# --- Seguridad (revisión PR #42): saltos de línea reproducibles en export ---
+
+
+def test_export_writes_seed_sql_with_fixed_newline_even_on_windows(tmp_path: Path) -> None:
+    # Revisión PR #42, hallazgo 6: seed.sql lleva muchos '\n' entre sentencias
+    # (BEGIN/INSERT/COMMIT); out.write_text sin newline="" los traduciría a
+    # '\r\n' en Windows, rompiendo la reproducibilidad byte a byte entre
+    # plataformas del propio criterio de aceptación del Hito 2 (T2.16).
+    seed = tmp_path / "seed.sql"
+    result = _invoke(
+        "export",
+        _fixture("ciclos_nullable"),
+        "-c",
+        _config(tmp_path, _CICLOS_CFG),
+        "--format",
+        "sql",
+        "-o",
+        str(seed),
+    )
+    assert result.exit_code == 0, result.output
+    raw = seed.read_bytes()
+    assert b"\r\n" not in raw
+    assert raw.endswith(b"\n")
+    assert raw.count(b"\n") > 1

@@ -37,6 +37,123 @@ from typing import Any
 
 from synthdb.ir.schema import TableSpec
 
+_SAFE_FILENAME_BYTES = frozenset(
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)
+"""Bytes que un componente de nombre de archivo conserva tal cual (revisión PR
+#42, hallazgo 2). Cualquier otro byte -separadores de ruta (`/`, `\\`), `..`,
+`.`, espacios, caracteres de control y cualquier byte no-ASCII de una
+secuencia UTF-8- se percent-encodea como `%XX` (dos hex mayúsculas). El propio
+`%` también se codifica, así que el esquema es inyectivo: dos nombres de tabla
+distintos jamás producen el mismo texto codificado, y ningún nombre puede
+introducir un separador de ruta o un `..` en el resultado."""
+
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+"""Nombres de dispositivo reservados de Windows (comparación insensible a
+mayúsculas): prohibidos como base de un nombre de archivo con cualquier
+extensión, no solo sin ella."""
+
+
+def _encode_name_component(name: str) -> str:
+    """Codifica `name` a un componente de nombre de archivo seguro e inyectivo.
+
+    Percent-encoding sobre los bytes UTF-8 de `name`: todo byte fuera de
+    `_SAFE_FILENAME_BYTES` se sustituye por `%XX`. Determinista, sin
+    dependencia del sistema operativo ni del locale.
+    """
+    parts = []
+    for byte in name.encode("utf-8"):
+        if byte in _SAFE_FILENAME_BYTES:
+            parts.append(chr(byte))
+        else:
+            parts.append(f"%{byte:02X}")
+    return "".join(parts)
+
+
+def _table_identity(table: TableSpec) -> str:
+    """Nombre legible de la tabla para mensajes de error (`esquema.tabla` o `tabla`)."""
+    return f"{table.schema_}.{table.name}" if table.schema_ else table.name
+
+
+def _safe_table_filename(table: TableSpec, ext: str) -> str:
+    """Nombre de archivo determinista, inyectivo y seguro para `table`.
+
+    Una tabla sin `schema_` y con un nombre ya seguro produce exactamente
+    `<tabla>.<ext>` -el comportamiento previo a esta revisión, preservado a
+    propósito para el caso normal-. Cualquier carácter fuera de
+    `[A-Za-z0-9_-]` (separadores de ruta, `..`, control, espacios, Unicode) se
+    percent-encodea (`_encode_name_component`); una tabla cualificada con
+    esquema antepone el esquema codificado y un `.` propio, lo que evita la
+    colisión entre `esquemaA.tabla` y `esquemaB.tabla` -que antes de esta
+    revisión escribían ambas en `tabla.csv`-. Un resultado que choque con un
+    nombre de dispositivo reservado de Windows (`CON`, `PRN`...) se prefija
+    con `_`.
+    """
+    parts = [_encode_name_component(table.name)]
+    if table.schema_:
+        parts = [_encode_name_component(table.schema_), _encode_name_component(table.name)]
+    stem = ".".join(parts)
+    if not stem or stem.lower() in _WINDOWS_RESERVED_STEMS:
+        stem = f"_{stem}"
+    return f"{stem}.{ext}"
+
+
+def _resolve_safe_path(out_dir: Path, table: TableSpec, ext: str) -> Path:
+    r"""Ruta final de `table` dentro de `out_dir`, verificada por contención.
+
+    El esquema de `_safe_table_filename` garantiza matemáticamente que el
+    resultado no puede escapar de `out_dir` (nunca produce `/`, `\\` ni `..`
+    crudos), pero se resuelve y se comprueba de forma explícita como defensa
+    en profundidad (hallazgo 2 de la revisión del PR #42): si algún caso no
+    previsto lo violara, falla con un error accionable en vez de escribir
+    fuera del directorio pedido.
+    """
+    filename = _safe_table_filename(table, ext)
+    candidate = out_dir / filename
+    if candidate.resolve().parent != out_dir.resolve():
+        raise ValueError(
+            f"tabla {_table_identity(table)}: el archivo derivado ({filename!r}) "
+            f"escaparía de {out_dir}. Esto no debería ocurrir con la codificación "
+            "actual del nombre; repórtalo con el nombre exacto de la tabla."
+        )
+    return candidate
+
+
+def validate_table_filenames(tables: Sequence[TableSpec], out_dir: Path, ext: str) -> None:
+    """Calcula y valida el archivo de CADA tabla antes de escribir ninguno.
+
+    Detecta colisiones (dos tablas que producirían el mismo archivo de
+    salida) y cualquier ruta que escaparía de `out_dir`, recorriendo TODAS las
+    tablas antes de que `write_table` escriba la primera -para no dejar una
+    salida parcial si una tabla posterior de la lista es la que falla
+    (hallazgo 2 de la revisión del PR #42).
+
+    Args:
+        tables: Tablas del esquema, en el orden en que se van a escribir.
+        out_dir: Directorio destino (no hace falta que exista todavía).
+        ext: Extensión sin punto (`"csv"` o `"json"`).
+
+    Raises:
+        ValueError: si dos tablas colisionan en el mismo archivo, o si alguna
+            ruta resuelta escaparía de `out_dir`.
+    """
+    seen: dict[str, str] = {}
+    for table in tables:
+        path = _resolve_safe_path(out_dir, table, ext)
+        identity = _table_identity(table)
+        filename = path.name
+        if filename in seen:
+            raise ValueError(
+                f"las tablas {seen[filename]!r} y {identity!r} producirían el mismo "
+                f"archivo de salida ({filename!r}); no se puede generar sin ambigüedad. "
+                "Renombra una de las dos tablas o su esquema."
+            )
+        seen[filename] = identity
+
 
 def _json_default(value: Any) -> Any:
     """Serializa a JSON los tipos que `json` no cubre, sin perder información.
@@ -90,7 +207,7 @@ class CsvSink:
         """Escribe `<tabla>.csv` con cabecera y una fila por registro."""
         self.out_dir.mkdir(parents=True, exist_ok=True)
         columns = [column.name for column in table.columns]
-        path = self.out_dir / f"{table.name}.csv"
+        path = _resolve_safe_path(self.out_dir, table, "csv")
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle, lineterminator="\n")
             writer.writerow(columns)
@@ -119,9 +236,14 @@ class JsonSink:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         columns = [column.name for column in table.columns]
         objects = [{column: row.get(column) for column in columns} for row in rows]
-        path = self.out_dir / f"{table.name}.json"
+        path = _resolve_safe_path(self.out_dir, table, "json")
         text = json.dumps(objects, ensure_ascii=False, indent=2, default=_json_default)
-        path.write_text(text + "\n", encoding="utf-8")
+        # `write_bytes`, no `write_text`: `json.dumps(indent=2)` produce `\n`
+        # entre líneas, y `Path.write_text` sin `newline=""` los traduciría a
+        # `\r\n` en Windows (modo texto por defecto), rompiendo la
+        # reproducibilidad byte a byte entre plataformas (revisión PR #42,
+        # hallazgo 6). Escribir bytes UTF-8 directos no traduce nada.
+        path.write_bytes((text + "\n").encode("utf-8"))
         self.paths.append(path)
 
     def finalize(self) -> None:

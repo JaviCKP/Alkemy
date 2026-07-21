@@ -1,16 +1,21 @@
-"""Reproducibilidad byte a byte de la generación a CSV (T2.16).
+"""Reproducibilidad byte a byte de la generación a CSV/JSON/SQL (T2.16).
 
 Es el criterio de cierre del Hito 2: «misma semilla ⇒ mismos bytes»
 (especificacion.md §13, §17). Dos garantías:
 
-1. **Hashes golden.** Generar `inmobiliaria` con una configuración y semilla
-   fijas produce CSVs cuyo SHA-256 coincide con los valores fijados aquí. Estos
-   hashes tienen el **mismo régimen que los snapshots** (`syrupy`): no se
-   regeneran sin una justificación explícita en el commit y el PR. Dependen de
-   la salida de Faker con locale `es_ES`; una actualización de Faker que cambie
-   esos textos exigiría regenerarlos, documentándolo.
-2. **Idempotencia intra-proceso.** Dos generaciones seguidas en el mismo proceso
-   producen archivos idénticos, byte a byte.
+1. **Hashes golden (CSV).** Generar `inmobiliaria` con una configuración y
+   semilla fijas produce CSVs cuyo SHA-256 coincide con los valores fijados
+   aquí. Estos hashes tienen el **mismo régimen que los snapshots** (`syrupy`):
+   no se regeneran sin una justificación explícita en el commit y el PR.
+   Dependen de la salida de Faker con locale `es_ES`; una actualización de
+   Faker que cambie esos textos exigiría regenerarlos, documentándolo.
+2. **Idempotencia intra-proceso, en los TRES formatos** (CSV, JSON y SQL; T2.16
+   original solo cubría CSV). Dos generaciones seguidas en el mismo proceso
+   producen archivos/texto idénticos, byte a byte -incluido el terminador de
+   línea, que `JsonSink`/`export` escriben como bytes UTF-8 directos
+   precisamente para que esto se cumpla también en Windows (revisión PR #42,
+   hallazgo 6: `Path.write_text` sin `newline=""` traduciría `\\n` a `\\r\\n`
+   ahí, y solo en esa plataforma).
 
 La configuración se fija en Python (no en un YAML editable) para que el golden
 dependa solo de este archivo. No usa reglas del mini-DSL a propósito: el rango
@@ -24,8 +29,10 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from synthdb.config.models import ColumnConfig, Config, FkQuota, FkZipf, TableConfig
-from synthdb.emit import generate_files
+from synthdb.emit import generate_files, render_sql
 from synthdb.generation.engine import generate_dataset
 from synthdb.ir.schema import SchemaSpec
 from synthdb.parsing.ddl import parse_ddl
@@ -88,10 +95,24 @@ def test_inmobiliaria_csv_matches_golden_hashes(tmp_path: Path) -> None:
     assert _generate_csv_hashes(tmp_path) == _GOLDEN_CSV_SHA256
 
 
-def test_two_generations_in_one_process_are_byte_identical(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_two_generations_in_one_process_are_byte_identical(tmp_path: Path, fmt: str) -> None:
     spec = _schema()
-    first = generate_files(spec, generate_dataset(spec, _config()), tmp_path / "a", "csv")
-    second = generate_files(spec, generate_dataset(spec, _config()), tmp_path / "b", "csv")
+    first = generate_files(spec, generate_dataset(spec, _config()), tmp_path / "a", fmt)
+    second = generate_files(spec, generate_dataset(spec, _config()), tmp_path / "b", fmt)
     assert [path.name for path in first] == [path.name for path in second]
     for path_a, path_b in zip(first, second, strict=True):
         assert path_a.read_bytes() == path_b.read_bytes()
+
+
+def test_two_sql_exports_in_one_process_are_byte_identical() -> None:
+    # export no pasa por generate_files/Sink: render_sql produce el texto y
+    # la CLI lo escribe como bytes UTF-8 directos (hallazgo 6); aquí se
+    # comprueba la parte que sí es una función pura y reutilizable, render_sql.
+    spec = _schema()
+    config = _config()
+    first = render_sql(spec, generate_dataset(spec, config), config).encode("utf-8")
+    second = render_sql(spec, generate_dataset(spec, config), config).encode("utf-8")
+    assert first == second
+    assert b"\r\n" not in first
+    assert first.endswith(b"\n")

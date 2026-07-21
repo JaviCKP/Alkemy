@@ -13,13 +13,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from synthdb.emit.base import Sink, write_dataset
-from synthdb.emit.csv_json import CsvSink, JsonSink
-from synthdb.emit.sql_file import render_sql
+from synthdb.emit.csv_json import CsvSink, JsonSink, validate_table_filenames
+from synthdb.emit.sql_file import ExportIntegrityError, render_sql
 from synthdb.generation.engine import Dataset
 from synthdb.ir.schema import SchemaSpec
 
 __all__ = [
     "CsvSink",
+    "ExportIntegrityError",
     "JsonSink",
     "Sink",
     "generate_files",
@@ -41,14 +42,15 @@ def generate_files(spec: SchemaSpec, dataset: Dataset, out_dir: str | Path, fmt:
         Las rutas de los archivos escritos, en el orden de las tablas.
 
     Raises:
-        ValueError: Si `fmt` no es `"csv"` ni `"json"`.
+        ValueError: Si `fmt` no es `"csv"` ni `"json"`, o si dos tablas
+            producirían el mismo archivo de salida (validado ANTES de escribir
+            ninguna, para no dejar una salida parcial; hallazgo 2 de la
+            revisión del PR #42).
     """
-    sink: CsvSink | JsonSink
-    if fmt == "csv":
-        sink = CsvSink(out_dir)
-    elif fmt == "json":
-        sink = JsonSink(out_dir)
-    else:
+    if fmt not in {"csv", "json"}:
         raise ValueError(f"formato de salida no soportado: {fmt!r} (usa 'csv' o 'json').")
+    out_path = Path(out_dir)
+    validate_table_filenames(spec.tables, out_path, fmt)
+    sink: CsvSink | JsonSink = CsvSink(out_path) if fmt == "csv" else JsonSink(out_path)
     write_dataset(spec, dataset, sink)
     return sink.paths
