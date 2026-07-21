@@ -990,17 +990,43 @@ def _enforce_referential_integrity(spec: SchemaSpec, dataset: Dataset, store: Ke
             rows = dataset.tables.get(table.name)
             if not rows or not table.foreign_keys:
                 continue
+
+            # Bolt: Pre-compute FK targets outside the per-row loop
+            fk_checks: list[tuple[tuple[str, ...], set[tuple[Any, ...]]]] = []
+            for fk in table.foreign_keys:
+                parent = by_name.get(fk.ref_table)
+                if parent is None:
+                    continue
+                parent_values = accepted.get((parent.name, tuple(fk.ref_columns)))
+                if parent_values is not None:
+                    fk_checks.append((tuple(fk.columns), parent_values))
+
+            if not fk_checks:
+                continue
+
             keep: list[bool] = []
             bad: list[ValidationIssue] = []
             for row in rows:
-                columns = _dangling_fk_columns(row, table, by_name, accepted)
-                keep.append(not columns)
-                if columns:
+                dangling: list[str] = []
+                for columns, parent_values in fk_checks:
+                    # Bolt: Avoid generator expressions for single-column FKs
+                    if len(columns) == 1:
+                        value = row.get(columns[0])
+                        if value is not None and (value,) not in parent_values:
+                            dangling.extend(columns)
+                    else:
+                        values = tuple(row.get(column) for column in columns)
+                        if None not in values and values not in parent_values:
+                            dangling.extend(columns)
+
+                columns_tuple = tuple(dict.fromkeys(dangling))
+                keep.append(not columns_tuple)
+                if columns_tuple:
                     bad.append(
                         (
                             row,
-                            columns,
-                            f"FK ({', '.join(columns)}) apunta a una fila que quedó en "
+                            columns_tuple,
+                            f"FK ({', '.join(columns_tuple)}) apunta a una fila que quedó en "
                             f"cuarentena; se aísla para no dejar una referencia colgante",
                         )
                     )
@@ -1036,35 +1062,6 @@ def _accepted_ref_value_sets(
         }
         for table_name, ref_columns in targets
     }
-
-
-def _dangling_fk_columns(
-    row: dict[str, Any],
-    table: TableSpec,
-    by_name: dict[str, TableSpec],
-    accepted: dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]],
-) -> tuple[str, ...]:
-    """Columnas de las FK no nulas de `row` cuyo padre no figura entre los aceptados.
-
-    Refleja la misma semántica que ``validation.structural._foreign_key_errors``:
-    una FK con algún NULL se salta (su nulabilidad ya se validó) y la clave del
-    hijo se compara contra los valores de ``fk.ref_columns`` de las filas padre
-    aceptadas, en su orden exacto (hallazgo 3).
-    """
-    dangling: list[str] = []
-    for fk in table.foreign_keys:
-        values = tuple(row.get(column) for column in fk.columns)
-        if any(value is None for value in values):
-            continue
-        parent = by_name.get(fk.ref_table)
-        if parent is None:
-            continue
-        parent_values = accepted.get((parent.name, tuple(fk.ref_columns)))
-        if parent_values is None:
-            continue
-        if values not in parent_values:
-            dangling.extend(fk.columns)
-    return tuple(dict.fromkeys(dangling))
 
 
 def _drop_unkept_rows(dataset: Dataset, table_name: str, keep: list[bool]) -> None:
