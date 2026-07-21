@@ -1,0 +1,3 @@
+## 2024-05-23 - Optimize referential integrity enforcement loop
+**Learning:** `_enforce_referential_integrity` iterates over all accepted rows to detect dangling FKs using `_accepted_ref_value_sets`. In the inner loop, dynamically looking up the parent values map for each table/fk combination and using generator expressions to unpack row values `tuple(row.get(column) for column in columns)` created huge overhead for datasets with 10k+ rows.
+**Action:** When performing row-by-row structural validation, always pre-compute metadata/lookups outside the loop. Avoid generator expressions inside high-frequency loops; instead use direct dict access and `None not in values` for tuples.
