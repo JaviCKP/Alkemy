@@ -144,7 +144,7 @@ def fits(value: Any, precision: int, scale: int | None) -> bool:
     """
     rounded = quantize_to_scale(value, scale)
     limit = representable_limit(precision, scale)
-    return -limit <= rounded <= limit
+    return limit.copy_negate() <= rounded <= limit
 
 
 def has_quantized_value(
@@ -187,11 +187,12 @@ def has_quantized_value(
         pedido y sus exclusividades; `False` si el rango es imposible.
     """
     limit = representable_limit(precision, scale)
+    negative_limit = limit.copy_negate()
 
-    eff_low = as_decimal(low) if low is not None else -limit
+    eff_low = as_decimal(low) if low is not None else negative_limit
     eff_low_exclusive = min_exclusive if low is not None else False
-    if eff_low < -limit:
-        eff_low, eff_low_exclusive = -limit, False
+    if eff_low < negative_limit:
+        eff_low, eff_low_exclusive = negative_limit, False
 
     eff_high = as_decimal(high) if high is not None else limit
     eff_high_exclusive = max_exclusive if high is not None else False

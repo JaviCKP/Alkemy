@@ -488,6 +488,14 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- Tercera revisión de PR #40: `numeric_range` mantiene en `Decimal` las cotas y
+  la rejilla de `NUMERIC(p, s)` hasta la cuantización final, evitando el
+  subdesbordamiento de `scale_step` en escalas grandes y preservando el contexto
+  decimal global. Las referencias FK cualificadas por schema se resuelven al
+  `TableSpec` canónico antes de detectar autorreferencias, validar lotes y cerrar
+  la integridad referencial. Se añaden regresiones unitarias para ambos casos y
+  una prueba PostgreSQL real marcada `integration` para redondeo y overflow.
+
 - Segunda revisión de la sesión E (PR #40): cuatro hallazgos nuevos sobre la
   revisión anterior, en `generation/numeric_bounds.py`,
   `generation/generators/numeric.py`, `generation/engine.py` y

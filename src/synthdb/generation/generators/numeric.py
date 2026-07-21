@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import bisect
 import math
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Context, Decimal
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -23,6 +23,7 @@ from synthdb.generation.generators.distributions import (
     ZipfParams,
 )
 from synthdb.generation.numeric_bounds import (
+    as_decimal,
     quantize_to_scale,
     representable_limit,
     scale_step,
@@ -45,6 +46,20 @@ _BOUNDED_SAMPLE_TRIES = 100
 _ZIPF_MAX_RANKS = 100_000
 """Techo de categorías distintas de zipf: su cola es despreciable más allá, y
 acota el coste de construir la CDF sobre rangos enteros enormes."""
+
+
+def _local_decimal_context(*values: Decimal) -> Context:
+    """Construye un contexto local suficiente para operar con `values` exactos."""
+    required = 0
+    for value in values:
+        if not value.is_finite():
+            continue
+        exponent = value.as_tuple().exponent
+        if not isinstance(exponent, int):
+            continue
+        integer_digits = max(value.adjusted() + 1, 1) if value else 1
+        required += integer_digits + max(-exponent, 0)
+    return Context(prec=max(required + 8, 28))
 
 
 class NumericRangeParams(GeneratorParams):
@@ -110,25 +125,54 @@ class NumericRangeGenerator:
         como hasta ahora: rango por defecto `[0, 1]` y `float` sin cuantizar.
         """
         type_spec = ctx.column.type
-        lo, hi = self._float_bounds()
-        step = self._p.round_to
-        if type_spec.precision is not None:
-            limit = float(representable_limit(type_spec.precision, type_spec.scale))
-            lo, hi = max(lo, -limit), min(hi, limit)
-            if step is None:
-                # La escala del tipo es el paso natural: NUMERIC(_, 2) ⇒ 0.01.
-                step = float(scale_step(type_spec.scale))
-        if lo > hi:
+        if type_spec.precision is None:
+            lo, hi = self._float_bounds()
+            step = self._p.round_to
+            if lo > hi:
+                raise ValueError(
+                    f"numeric_range: rango vacío en {ctx.table}.{ctx.column.name} "
+                    f"(min>max tras recortar al rango representable del tipo)."
+                )
+            x = max(lo, min(hi, self._quantize(self._sample(ctx, lo, hi), step)))
+            return self._apply_float_exclusivity(x, lo, hi, step)
+
+        # Las cotas del tipo y el paso natural se mantienen como Decimal hasta
+        # terminar la semántica NUMERIC. Convertir scale_step a float hace que
+        # NUMERIC(1000, 500) use 0.0 y provoque DivisionByZero en _quantize.
+        limit = representable_limit(type_spec.precision, type_spec.scale)
+        negative_limit = limit.copy_negate()
+        decimal_lo = as_decimal(self._p.min) if self._p.min is not None else Decimal("0")
+        decimal_hi = as_decimal(self._p.max) if self._p.max is not None else Decimal("1")
+        decimal_lo = max(decimal_lo, negative_limit)
+        decimal_hi = min(decimal_hi, limit)
+        if decimal_lo > decimal_hi:
             raise ValueError(
                 f"numeric_range: rango vacío en {ctx.table}.{ctx.column.name} "
                 f"(min>max tras recortar al rango representable del tipo)."
             )
-        x = max(lo, min(hi, self._quantize(self._sample(ctx, lo, hi), step)))
-        x = self._apply_float_exclusivity(x, lo, hi, step)
-        if type_spec.precision is not None:
-            # Garantiza que el valor almacenado es exactamente representable.
-            return float(quantize_to_scale(x, type_spec.scale))
-        return x
+
+        sampled = as_decimal(self._sample(ctx, float(decimal_lo), float(decimal_hi)))
+        explicit_step = as_decimal(self._p.round_to) if self._p.round_to is not None else None
+        if explicit_step is None:
+            decimal_step = scale_step(type_spec.scale)
+            decimal_x = quantize_to_scale(sampled, type_spec.scale)
+        else:
+            decimal_step = explicit_step
+            decimal_x = as_decimal(self._quantize(float(sampled), self._p.round_to))
+        decimal_x = max(decimal_lo, min(decimal_hi, decimal_x))
+        if self._p.min_exclusive and decimal_x <= decimal_lo:
+            decimal_x = _local_decimal_context(decimal_lo, decimal_step).add(
+                decimal_lo, decimal_step
+            )
+        if self._p.max_exclusive and decimal_x >= decimal_hi:
+            decimal_x = _local_decimal_context(decimal_hi, decimal_step).subtract(
+                decimal_hi, decimal_step
+            )
+        decimal_x = max(decimal_lo, min(decimal_hi, decimal_x))
+
+        # El contrato público del generador sigue siendo float; la conversión es
+        # deliberadamente el último paso, después de cuantizar a la escala exacta.
+        return float(quantize_to_scale(decimal_x, type_spec.scale))
 
     def _int_bounds(self, ctx: GenContext) -> tuple[int, int]:
         bit_lo, bit_hi = _bit_bounds(ctx.column.type.bits)
@@ -157,8 +201,14 @@ class NumericRangeGenerator:
         """
         if step is None:
             return x
-        s = Decimal(str(step))
-        return float((Decimal(str(x)) / s).to_integral_value(rounding=ROUND_HALF_UP) * s)
+        value = Decimal(str(x))
+        s = step if isinstance(step, Decimal) else Decimal(str(step))
+        if not s:
+            raise ValueError("numeric_range: el paso de cuantización no puede ser 0.")
+        ctx = _local_decimal_context(value, s)
+        quotient = ctx.divide(value, s)
+        integral = quotient.to_integral_value(rounding=ROUND_HALF_UP, context=ctx)
+        return float(ctx.multiply(integral, s))
 
     def _apply_float_exclusivity(self, x: float, lo: float, hi: float, step: float | None) -> float:
         effective = step if step else max((hi - lo) * 1e-9, 1e-9)

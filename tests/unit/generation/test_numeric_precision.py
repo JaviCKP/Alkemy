@@ -9,7 +9,7 @@ rejilla de la escala o por una exclusividad, hallazgo 2— en un `PlanError` acc
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, getcontext
 from typing import Any
 
 import pytest
@@ -92,7 +92,7 @@ def test_representable_limit_and_fits_are_exact_for_large_precision(
     assert len(limit.as_tuple().digits) == precision  # nunca truncado a 28
     assert str(limit).lstrip("-").replace(".", "") == "9" * precision
     assert fits(limit, precision, scale)
-    assert fits(-limit, precision, scale)
+    assert fits(limit.copy_negate(), precision, scale)
     # Un valor de magnitud mayor, aunque con pocos dígitos ALMACENADOS (coeficiente
     # corto + exponente grande), debe seguir desbordando sin reventar.
     oversized = Decimal(f"2E+{precision + 5}")
@@ -167,6 +167,98 @@ def test_numeric_range_clamps_request_to_the_representable_window(sample, make_c
     vals = sample(num(min=-1000, max=1000), 500, column=col)
     assert all(Decimal("-9.99") <= Decimal(str(v)) <= Decimal("9.99") for v in vals)
     assert all(fits(v, 3, 2) for v in vals)
+
+
+def test_numeric_range_large_scale_is_representable_and_batch_size_independent() -> None:
+    spec = parse_ddl("CREATE TABLE t (id SERIAL PRIMARY KEY, x NUMERIC(1000, 500) NOT NULL);")
+
+    def run(batch_size: int):
+        return generate_dataset(
+            spec,
+            Config(
+                seed=17,
+                tables={
+                    "t": TableConfig(
+                        rows=4,
+                        columns={
+                            "x": ColumnConfig(
+                                generator="numeric_range", params={"min": 0, "max": 1}
+                            )
+                        },
+                    )
+                },
+                output=OutputConfig(batch_size=batch_size),
+            ),
+        )
+
+    before = getcontext().copy()
+    small_batch = run(1)
+    large_batch = run(2)
+    after = getcontext()
+
+    assert before.prec == after.prec
+    assert before.Emin == after.Emin
+    assert before.Emax == after.Emax
+    assert before.rounding == after.rounding
+    assert before.flags == after.flags
+    assert before.traps == after.traps
+    assert small_batch.tables == large_batch.tables
+    assert small_batch.quarantine == {}
+    values = [row["x"] for row in small_batch.tables["t"]]
+    assert len(values) == 4
+    assert all(isinstance(value, float) for value in values)
+    assert all(fits(value, 1000, 500) for value in values)
+    assert all(quantize_to_scale(value, 500).as_tuple().exponent == -500 for value in values)
+
+
+def test_numeric_range_handles_scale_larger_than_precision() -> None:
+    spec = parse_ddl("CREATE TABLE t (id SERIAL PRIMARY KEY, x NUMERIC(3, 5) NOT NULL);")
+    dataset = generate_dataset(
+        spec,
+        Config(
+            seed=19,
+            tables={
+                "t": TableConfig(
+                    rows=4,
+                    columns={
+                        "x": ColumnConfig(generator="numeric_range", params={"min": 0, "max": 1})
+                    },
+                )
+            },
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    values = [row["x"] for row in dataset.tables["t"]]
+    assert all(fits(value, 3, 5) for value in values)
+    assert all(Decimal("0") <= Decimal(str(value)) <= Decimal("0.00999") for value in values)
+
+
+@pytest.mark.parametrize("scale", [308, 309])
+def test_numeric_range_handles_float_subnormal_scale_boundary(scale: int) -> None:
+    precision = scale + 2
+    spec = parse_ddl(
+        f"CREATE TABLE t (id SERIAL PRIMARY KEY, x NUMERIC({precision}, {scale}) NOT NULL);"
+    )
+    dataset = generate_dataset(
+        spec,
+        Config(
+            seed=23,
+            tables={
+                "t": TableConfig(
+                    rows=2,
+                    columns={
+                        "x": ColumnConfig(generator="numeric_range", params={"min": 0, "max": 1})
+                    },
+                )
+            },
+            output=OutputConfig(batch_size=2),
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    values = [row["x"] for row in dataset.tables["t"]]
+    assert all(fits(value, precision, scale) for value in values)
 
 
 def test_numeric_range_reaches_the_representable_extremes(sample, make_column) -> None:

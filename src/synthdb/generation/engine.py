@@ -826,6 +826,7 @@ def _generate_leveled_table(
     table_seed = seed_for_table(config.seed, compiled.spec.name)
     rows: list[dict[str, Any]] = []
     indices_by_level: dict[int, list[int]] = {}
+    self_fk = _self_fk(compiled.spec, phase.self_fk_columns, _CURRENT_TABLE_INDEX)
     for start in range(0, total, config.output.batch_size):
         batch: list[dict[str, Any]] = []
         for row_number in range(start, min(total, start + config.output.batch_size)):
@@ -840,7 +841,7 @@ def _generate_leveled_table(
                 if phase.roots_point_to_self:
                     for local, ref in zip(
                         phase.self_fk_columns,
-                        _self_fk(compiled.spec, phase.self_fk_columns).ref_columns,
+                        self_fk.ref_columns,
                         strict=True,
                     ):
                         row[local] = row[ref]
@@ -851,8 +852,7 @@ def _generate_leveled_table(
             else:
                 previous = indices_by_level[level - 1]
                 parent = rows[previous[rng.randrange(len(previous))]]
-                fk = _self_fk(compiled.spec, phase.self_fk_columns)
-                for local, ref in zip(fk.columns, fk.ref_columns, strict=True):
+                for local, ref in zip(self_fk.columns, self_fk.ref_columns, strict=True):
                     row[local] = parent[ref]
             parents: dict[str, dict[str, Any] | None] = dict.fromkeys(phase.self_fk_columns, parent)
             states: dict[str, RandomState] = {}
@@ -904,9 +904,13 @@ def _level_numbers(total: int, branching: int, max_depth: int) -> list[int]:
     )
 
 
-def _self_fk(table: TableSpec, columns: list[str]) -> RelationshipSpec:
+def _self_fk(
+    table: TableSpec, columns: list[str], by_name: dict[str, TableSpec]
+) -> RelationshipSpec:
     return next(
-        fk for fk in table.foreign_keys if fk.columns == columns and fk.ref_table == table.name
+        fk
+        for fk in table.foreign_keys
+        if fk.columns == columns and by_name.get(fk.ref_table) is table
     )
 
 
@@ -1013,12 +1017,17 @@ def _accepted_ref_value_sets(
 ) -> dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]]:
     """Valores de las filas ACTUALMENTE aceptadas, por (tabla padre, columnas referenciadas).
 
-    Se computa una entrada por cada combinación `(fk.ref_table, fk.ref_columns)`
-    que aparece en alguna FK del esquema —incluidas las autorreferencias—, nunca
-    asumiendo que `ref_columns` es `table.primary_key` (hallazgo 3).
+    Se computa una entrada por cada combinación `(tabla canónica referenciada,
+    fk.ref_columns)` que aparece en alguna FK del esquema —incluidas las
+    autorreferencias—, nunca asumiendo que `ref_columns` es `table.primary_key`
+    (hallazgo 3).
     """
+    by_name = index_tables(spec)
     targets = {
-        (fk.ref_table, tuple(fk.ref_columns)) for table in spec.tables for fk in table.foreign_keys
+        (parent.name, tuple(fk.ref_columns))
+        for table in spec.tables
+        for fk in table.foreign_keys
+        if (parent := by_name.get(fk.ref_table)) is not None
     }
     return {
         (table_name, ref_columns): {

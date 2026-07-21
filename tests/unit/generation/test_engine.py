@@ -116,6 +116,56 @@ def test_self_reference_uses_only_previous_level(schema_name: str, roots_self: b
             assert by_id[row["manager_id"]] == level - 1
 
 
+def test_qualified_self_reference_uses_the_canonical_table_name() -> None:
+    spec = parse_ddl(
+        "CREATE TABLE public.employees ("
+        "id SERIAL PRIMARY KEY, "
+        "manager_id INT REFERENCES public.employees(id), "
+        "name TEXT NOT NULL"
+        ");"
+    )
+    dataset = generate_dataset(
+        spec,
+        Config(
+            seed=3,
+            tables={"employees": TableConfig(rows=4)},
+            hierarchy={"employees.manager_id": HierarchyConfig(branching=2, max_depth=3)},
+        ),
+    )
+
+    rows = dataset.tables["employees"]
+    ids = {row["id"] for row in rows}
+    assert len(rows) == 4
+    assert dataset.quarantine == {}
+    assert rows[0]["manager_id"] is None
+    assert all(row["manager_id"] is None or row["manager_id"] in ids for row in rows)
+
+
+def test_qualified_self_reference_closure_uses_canonical_table_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = parse_ddl(
+        "CREATE TABLE public.employees ("
+        "id SERIAL PRIMARY KEY, "
+        "manager_id INT REFERENCES public.employees(id), "
+        "name TEXT NOT NULL"
+        ");"
+    )
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("name", 1, "name"))
+
+    dataset = generate_dataset(
+        spec,
+        Config(
+            seed=3,
+            tables={"employees": TableConfig(rows=4)},
+            hierarchy={"employees.manager_id": HierarchyConfig(branching=2, max_depth=3)},
+        ),
+    )
+
+    assert dataset.tables["employees"] == []
+    assert len(dataset.quarantine["employees"]) == 4
+
+
 def test_text_array_and_quarantine_keep_the_rest_of_the_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

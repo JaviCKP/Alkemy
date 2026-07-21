@@ -38,7 +38,7 @@ def validate_batch(
     table = next(table for table in spec.tables if table.name == table_plan.table)
     compiled = dataset._compiled.get(table.name)
     unique_sets = dataset._validation_unique.setdefault(table.name, {})
-    self_parent_values = _self_referenced_values(table, rows, dataset)
+    self_parent_values = _self_referenced_values(table, rows, dataset, spec)
     ok: list[dict[str, Any]] = []
     bad: list[ValidationIssue] = []
 
@@ -317,7 +317,7 @@ def _foreign_key_errors(
 
 
 def _self_referenced_values(
-    table: TableSpec, rows: list[dict[str, Any]], dataset: Dataset
+    table: TableSpec, rows: list[dict[str, Any]], dataset: Dataset, spec: SchemaSpec
 ) -> dict[tuple[str, ...], set[tuple[Any, ...]]]:
     """Valores de cada `ref_columns` autorreferenciado vistos hasta ahora en `table`.
 
@@ -328,8 +328,10 @@ def _self_referenced_values(
     en `dataset.tables[table.name]`.
     """
     result: dict[tuple[str, ...], set[tuple[Any, ...]]] = {}
+    by_name = index_tables(spec)
     for fk in table.foreign_keys:
-        if fk.ref_table != table.name:
+        parent = by_name.get(fk.ref_table)
+        if parent is None or parent.name != table.name:
             continue
         ref_columns = tuple(fk.ref_columns)
         if ref_columns in result:
