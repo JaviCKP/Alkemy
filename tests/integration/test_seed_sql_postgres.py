@@ -250,7 +250,15 @@ def test_empty_and_non_empty_enum_arrays_load_into_postgres() -> None:
             cursor.execute(seed_sql)  # antes del fix: fallaría en la fila 1 (array vacío)
 
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, tags FROM moods ORDER BY id")
+            # `tags::text[]`: psycopg no sabe parsear un array de un enum
+            # DEFINIDO POR EL USUARIO a una lista de Python (solo los tipos
+            # array conocidos), así que devolvería la representación textual
+            # cruda del array. El cast a `text[]` -un tipo array conocido- no
+            # cambia los valores (las etiquetas del enum son texto) y sí hace
+            # que psycopg los entregue como lista, que es lo que se compara.
+            # Que la fila llegara a existir para poder leerla ya demuestra que
+            # el `seed.sql` cargó sin el error de tipado del hallazgo 4.
+            cursor.execute("SELECT id, tags::text[] FROM moods ORDER BY id")
             rows = cursor.fetchall()
 
         with connection.cursor() as cursor:
