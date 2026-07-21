@@ -184,11 +184,15 @@ Escrito seed.sql (76006 bytes).
 - `INSERT` multi-fila por lotes (`output.batch_size`), con las columnas en el
   orden del esquema. Las columnas autoincrementales (`SERIAL`) se **omiten**: las
   asigna la base de datos.
-- Todos los literales se renderizan con el generador de expresiones de sqlglot
-  (comillas y backslashes escapados por la librería, arrays como `ARRAY[...]`,
-  arrays vacíos como el literal de texto `'{}'` sin tipar —así PostgreSQL lo
-  resuelve contra el tipo real de la columna destino, también para arrays de
-  `enum`, sin necesitar su nombre—). No hay escapado artesanal.
+- Los literales escalares se renderizan con el generador de expresiones de
+  sqlglot (comillas y backslashes escapados por la librería); nunca
+  concatenación ni escapado SQL artesanal. Un array (vacío o no) se emite
+  como un único literal de texto sin tipar en el formato nativo de arrays de
+  PostgreSQL (`'{}'`, `'{a,b}'`, `'{"a,b","c\"d"}'`...) —nunca
+  `ARRAY[...]`—, así PostgreSQL lo resuelve contra el tipo real de la columna
+  destino, también para arrays de `enum`, sin necesitar su nombre. El
+  entrecomillado de cada elemento del array sigue el formato documentado de
+  PostgreSQL (`8.15.2. Array Value Input`), no una invención propia.
 - Los identificadores se entrecomillan **solo cuando el plegado de PostgreSQL lo
   exige** (mayúsculas, caracteres especiales o palabra reservada).
 

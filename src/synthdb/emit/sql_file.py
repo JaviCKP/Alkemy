@@ -210,29 +210,75 @@ def _qualified_table(table: TableSpec) -> str:
     return name
 
 
-def _literal(value: Any, column: ColumnSpec) -> exp.Expression:
-    """Construye la expresión sqlglot del valor de una celda.
+_ARRAY_ELEMENT_NEEDS_QUOTE = re.compile(r'[,{}"\\\s]')
+"""Caracteres que el formato de texto nativo de un array de PostgreSQL usa
+como delimitadores o espacio en blanco: si un elemento contiene alguno, debe
+ir entrecomillado con `"..."` dentro del array (PostgreSQL, «8.15.2. Array
+Value Input»)."""
+
+
+def _quote_array_element(text: str) -> str:
+    r"""Entrecomilla UN elemento ya convertido a texto si el formato de array lo exige.
+
+    Vacío, la palabra `NULL` (sin distinguir mayúsculas: sin comillas se
+    leería como un elemento NULL real) o cualquier carácter reservado del
+    formato (`_ARRAY_ELEMENT_NEEDS_QUOTE`) disparan el entrecomillado, con `\\`
+    y `"` internos doblados/escapados.
+    """
+    if text == "" or text.upper() == "NULL" or _ARRAY_ELEMENT_NEEDS_QUOTE.search(text):
+        escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return text
+
+
+def _array_element_text(value: Any) -> str:
+    """Representación de un elemento (no `None`) en el formato de array de PostgreSQL."""
+    if isinstance(value, bool):  # antes que int: bool es subclase de int
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime.date | datetime.datetime):
+        return _quote_array_element(value.isoformat())
+    if isinstance(value, bytes | bytearray):
+        return _quote_array_element("\\x" + bytes(value).hex())
+    if isinstance(value, dict):
+        return _quote_array_element(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    if isinstance(value, str):
+        return _quote_array_element(value)
+    return _quote_array_element(str(value))
+
+
+def _literal(value: Any) -> exp.Expression:
+    r"""Construye la expresión sqlglot del valor de una celda.
 
     Todo pasa por `exp.*`; no hay una sola concatenación de SQL a mano.
 
-    Un array **vacío** se emite como el literal de texto `'{}'` -la
-    representación textual nativa de PostgreSQL para un array vacío-, SIN
-    ningún `CAST` a un tipo explícito (revisión PR #42, hallazgo 4). Antes se
-    envolvía en `CAST(ARRAY[] AS TEXT[])`: eso es correcto para una columna
-    `TEXT[]`, pero SILENCIOSAMENTE INCORRECTO para una columna de un array de
-    ENUM (`mood[]`): la IR (`ColumnSpec.enum_values`, congelada por ADR-003)
-    conserva las ETIQUETAS del enum pero no el NOMBRE del tipo `CREATE TYPE`
-    original -se descarta ya en el parser, `parsing/ddl.py::_register_create_type`-,
-    así que no hay forma de nombrar el tipo real sin releer el DDL ni ampliar
-    la IR. `'{}'` evita el problema por completo: es un literal de texto SIN
-    tipar (igual que cualquier valor escalar de enum de este mismo emisor,
-    `exp.Literal.string(value)` más abajo), así que PostgreSQL lo resuelve
-    contra el tipo de la columna destino del `INSERT`/`UPDATE` -el mismo
-    mecanismo de coerción por contexto que ya usa cualquier valor escalar de
-    enum-, sin necesidad de nombrar el tipo. Un array NO vacío sigue usando el
-    constructor `ARRAY[...]`: sus elementos son igualmente literales sin tipar
-    hasta que el contexto los resuelve, por lo que el mismo mecanismo aplica
-    elemento a elemento.
+    Un array (vacío o no) se emite como UN ÚNICO literal de texto con la
+    representación textual nativa de PostgreSQL (`'{}'`, `'{a,b}'`,
+    `'{"a,b","c\\"d"}'`...), SIN `CAST` ni el constructor `ARRAY[...]`
+    (revisión PR #42, hallazgo 4). Antes, un array vacío se envolvía en
+    `CAST(ARRAY[] AS TEXT[])` y uno no vacío usaba `ARRAY[elem, ...]` con cada
+    elemento como su propio literal: ambos son correctos para una columna
+    `TEXT[]`, pero SILENCIOSAMENTE INCORRECTOS para cualquier columna cuyo
+    tipo de array no sea literalmente `text[]` -un array de ENUM (`mood[]`),
+    mismo `DATE[]` o `JSON[]`-. La causa, verificada contra PostgreSQL real en
+    CI: el constructor `ARRAY[...]` resuelve su propio tipo a partir de sus
+    elementos (`text[]` para literales de cadena) ANTES de que el contexto de
+    la columna destino del `INSERT`/`UPDATE` pueda intervenir, así que
+    PostgreSQL intenta un cast de asignación `text[]` → tipo real de la
+    columna que en general no existe (p. ej. no hay `text[]` → `mood_enum[]`).
+    Un literal de texto PLANO (`'{...}'`, sin `ARRAY[]` alrededor) no tiene
+    ese problema: como CUALQUIER literal de cadena sin tipar de este emisor
+    (`exp.Literal.string`), PostgreSQL lo resuelve directamente contra el tipo
+    de la columna destino -el mismo mecanismo que ya usa cualquier valor
+    escalar de enum-, sin necesidad de nombrar el tipo. Esto evita además
+    tener que ampliar la IR congelada (ADR-003) con el nombre del `CREATE
+    TYPE` original del enum, que hoy no se conserva (`ColumnSpec.enum_values`
+    solo guarda las etiquetas).
     """
     if value is None:
         return exp.null()
@@ -251,17 +297,16 @@ def _literal(value: Any, column: ColumnSpec) -> exp.Expression:
     if isinstance(value, dict):
         return exp.Literal.string(json.dumps(value, ensure_ascii=False, sort_keys=True))
     if isinstance(value, list):
-        if not value:
-            return exp.Literal.string("{}")
-        return exp.Array(expressions=[_literal(item, column) for item in value])
+        inner = ",".join(_array_element_text(item) for item in value)
+        return exp.Literal.string("{" + inner + "}")
     if isinstance(value, str):
         return exp.Literal.string(value)
     return exp.Literal.string(str(value))
 
 
-def _render_value(value: Any, column: ColumnSpec) -> str:
+def _render_value(value: Any) -> str:
     """Renderiza el valor de una celda como literal SQL de PostgreSQL."""
-    return _literal(value, column).sql(dialect=_DIALECT)
+    return _literal(value).sql(dialect=_DIALECT)
 
 
 class ExportIntegrityError(ValueError):
@@ -337,7 +382,7 @@ def _value_tuple(
     posterior las fija.
     """
     parts = [
-        "NULL" if column.name in null_columns else _render_value(row.get(column.name), column)
+        "NULL" if column.name in null_columns else _render_value(row.get(column.name))
         for column in columns
     ]
     return "(" + ", ".join(parts) + ")"
@@ -380,7 +425,6 @@ def _update_statements(
             f"tabla {table.name}: una UpdatePhase requiere clave primaria para "
             "localizar la fila a actualizar."
         )
-    by_name = {column.name: column for column in table.columns}
     qualified = _qualified_table(table)
     statements: list[str] = []
     for row in rows:
@@ -388,11 +432,9 @@ def _update_statements(
         if not changed:
             continue
         set_clause = ", ".join(
-            f"{_ident(name)} = {_render_value(value, by_name[name])}" for name, value in changed
+            f"{_ident(name)} = {_render_value(value)}" for name, value in changed
         )
-        where = " AND ".join(
-            f"{_ident(pk)} = {_render_value(row[pk], by_name[pk])}" for pk in table.primary_key
-        )
+        where = " AND ".join(f"{_ident(pk)} = {_render_value(row[pk])}" for pk in table.primary_key)
         statements.append(f"UPDATE {qualified} SET {set_clause} WHERE {where};")
     return statements
 

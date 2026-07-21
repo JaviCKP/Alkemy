@@ -182,13 +182,19 @@ def test_empty_and_non_empty_enum_arrays_load_into_postgres() -> None:
     con etiquetas que llevan comilla, coma, backslash y Unicode, cargan
     correctamente (hallazgo 4 de la revisión del PR #42).
 
-    Antes, un array vacío se emitía como `CAST(ARRAY[] AS TEXT[])`: PostgreSQL
-    no convierte implícitamente `text[]` a un `enum[]` de usuario, así que
-    esa fila habría fallado con `column "tags" is of type mood_enum[] but
-    expression is of type text[]`. Ahora se emite como el literal de texto
-    `'{}'`, sin tipar, que PostgreSQL resuelve contra el tipo real de la
+    Antes, un array vacío se emitía como `CAST(ARRAY[] AS TEXT[])` -mal
+    tipado para un `enum[]`- y uno no vacío como `ARRAY['a', 'b']`. Esta
+    segunda forma resultó ser IGUALMENTE incorrecta: verificado contra
+    PostgreSQL real en CI, el constructor `ARRAY[...]` resuelve su propio
+    tipo (`text[]`) a partir de sus elementos ANTES de que el contexto de la
+    columna destino pueda intervenir, así que ambas formas fallaban igual con
+    `column "tags" is of type mood_enum[] but expression is of type text[]`.
+    Ahora TODO array (vacío o no) se emite como un único literal de texto sin
+    tipar en el formato nativo de PostgreSQL (`'{}'`, `'{a,b}'`,
+    `'{"a,b"}'`...), nunca `ARRAY[...]`: como cualquier literal de cadena sin
+    tipar de este emisor, PostgreSQL lo resuelve contra el tipo real de la
     columna destino -el mismo mecanismo que ya usa cualquier valor escalar de
-    enum de este emisor-.
+    enum-.
     """
     url = os.environ.get("SYNTHDB_TEST_POSTGRES_URL")
     if not url:

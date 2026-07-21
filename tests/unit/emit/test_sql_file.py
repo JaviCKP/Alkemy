@@ -96,8 +96,11 @@ def test_string_literals_escape_quotes_backslashes_and_keep_unicode() -> None:
     # La comilla simple se dobla; el backslash queda literal (standard strings);
     # el Unicode se conserva.
     assert "'O''Brien " + chr(92) + " café ñ 日本'" in sql
-    # Los elementos del array también escapan su comilla.
-    assert "ARRAY['a''b']" in sql
+    # El array se emite como el literal de texto nativo de PostgreSQL (no
+    # ARRAY[...]: revisión PR #42, hallazgo 4), y también escapa su comilla
+    # (a nivel del literal SQL que envuelve todo el array, no del formato de
+    # array en sí: una comilla simple no es un carácter reservado ahí).
+    assert "'{a''b}'" in sql
     # Un valor None se emite como NULL.
     assert "NULL" in sql
 
@@ -438,8 +441,13 @@ def test_non_empty_enum_array_escapes_special_characters_in_labels() -> None:
         phases=[InsertPhase(tables=["t"])],
     )
     sql = render_sql(spec, dataset, Config())
-    # sqlglot renderiza cada etiqueta como literal de cadena propio (comilla
-    # doblada, backslash literal, Unicode intacto), dentro de ARRAY[...].
-    assert "ARRAY['happy', 'O''Brien, " + chr(92) + "special" + chr(92) + "', 'café ñ 日本']" in sql
+    # El array entero es UN literal de texto de PostgreSQL (revisión PR #42,
+    # hallazgo 4: ni ARRAY[...] ni CAST). La etiqueta con coma/espacio/
+    # backslashes va entrecomillada dentro del formato de array (backslash
+    # doblado por ESE formato) y la comilla simple de "O'Brien" se dobla por
+    # el literal SQL que envuelve todo el array; la etiqueta Unicode va
+    # entrecomillada por sus espacios, sin necesitar más escapado.
+    expected = "'{happy,\"O''Brien, " + chr(92) * 2 + "special" + chr(92) * 2 + '","café ñ 日本"}\''
+    assert expected in sql
     statements = sqlglot.parse(sql, dialect="postgres")
     assert statements and all(statement is not None for statement in statements)
