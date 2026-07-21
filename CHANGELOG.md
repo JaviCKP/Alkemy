@@ -8,6 +8,17 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- H2 Sesión E (T2.11+T2.12+T2.13) — motor determinista en memoria con
+  compilación previa de generadores y reglas, ejecución por fases/lotes,
+  `KeyStore` y selectores de FK, `RowContext` con padres reales, costura
+  `complete_batch`, jerarquías por niveles, ciclos con actualizaciones diferidas,
+  puentes sin pares repetidos y arrays de 0–5 elementos. Se añade
+  `validation.structural.validate_batch` para tipos, NOT NULL, CHECK, UNIQUE/PK,
+  FK y re-evaluación exacta de todas las reglas, con abortado o cuarentena dentro
+  de `Dataset`. La configuración de una FK compuesta puede nombrar cualquiera de
+  sus columnas; estrategias contradictorias en la misma relación producen un
+  `ConfigError` que cita ambas claves.
+
 - T2.9+T2.10 (#36) — **mini-DSL de reglas** (parser + intérprete de lista blanca) y
   **RowContext + orden de columnas intra-fila** (Hito 2, Sesión D, §4 del plan;
   especificacion.md §7.2). Las `rules` del YAML dejan de ser cadenas opacas (Sesión B)
@@ -476,6 +487,113 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   existente de `ast_supported`/`bounds_derived` del hash canónico.
 
 ### Fixed
+
+- Tercera revisión de PR #40: `numeric_range` mantiene en `Decimal` las cotas y
+  la rejilla de `NUMERIC(p, s)` hasta la cuantización final, evitando el
+  subdesbordamiento de `scale_step` en escalas grandes y preservando el contexto
+  decimal global. Las referencias FK cualificadas por schema se resuelven al
+  `TableSpec` canónico antes de detectar autorreferencias, validar lotes y cerrar
+  la integridad referencial. Se añaden regresiones unitarias para ambos casos y
+  una prueba PostgreSQL real marcada `integration` para redondeo y overflow.
+
+- Segunda revisión de la sesión E (PR #40): cuatro hallazgos nuevos sobre la
+  revisión anterior, en `generation/numeric_bounds.py`,
+  `generation/generators/numeric.py`, `generation/engine.py` y
+  `validation/structural.py`.
+  - **`NUMERIC(p, s)` con la semántica exacta de PostgreSQL.** `quantize_to_scale`
+    (y el `_quantize` del generador `numeric_range`) redondeaban medio-a-par
+    (`ROUND_HALF_EVEN`); PostgreSQL aleja del cero los empates
+    (`ROUND_HALF_UP`): `0.385` a escala 2 pasa a ser `0.39` (no `0.38`,
+    simétrico en negativo), y `9.995` en `NUMERIC(3,2)` desborda tras
+    redondear (`10.00 > 9.99`). Además, `representable_limit`/
+    `quantize_to_scale`/`fits` dependían en silencio de la precisión ambiente
+    de `Decimal` (28 dígitos por defecto): `NUMERIC(50, 0)` truncaba su límite
+    sin avisar y `NUMERIC(100, 0)` reventaba con `InvalidOperation` al
+    cuantizar. Cada función construye ahora su propio `decimal.Context` LOCAL
+    (nunca `decimal.getcontext()`), dimensionado por los dígitos ENTEROS
+    reales del valor (`.adjusted()`, no `len(digits)`: un valor con exponente
+    grande y coeficiente corto como `2E+999` necesita igualmente 1000 dígitos)
+    más la escala destino; exacto hasta `NUMERIC(1000, 500)` sin tocar el
+    contexto global.
+  - **Rangos exclusivos y la rejilla de la escala en compilación.** La
+    comprobación de compilación (`_check_numeric_representable`) solo
+    intersecaba intervalos *reales*: `min=max=9.99, min_exclusive=true` en
+    `NUMERIC(3,2)` "solapaba" con la ventana representable y se aceptaba en
+    silencio aunque ningún valor lo cumple; `CHECK (x > 9.99)` en el mismo
+    tipo llegaba a generación y reventaba con `ValueError` en vez de
+    rechazarse en compilación. Nueva `numeric_bounds.has_quantized_value
+    (precision, scale, low, high, min_exclusive, max_exclusive)`: comprueba
+    que existe al menos un múltiplo de la escala dentro del rango, respetando
+    sus exclusividades y las del límite del tipo (que nunca excluye su propio
+    extremo salvo que el usuario lo pida). Ningún rango imposible llega ya al
+    bucle de generación ni acaba como cuarentena completa.
+  - **Las FK que referencian una UNIQUE distinta de la PK validan
+    correctamente.** `validate_batch`/`_foreign_key_errors` y la postcondición
+    `_enforce_referential_integrity` comparaban la clave del hijo contra
+    `parent.primary_key`, asumiendo que toda FK referencia la PK del padre.
+    `RelationshipSpec.ref_columns` puede apuntar a cualquier UNIQUE (o a la PK
+    compuesta en otro orden): con esa asunción, una FK así rechazaba en falso
+    casi todas sus filas, y el cierre nunca detectaba una referencia
+    realmente colgante hacia esa UNIQUE. Ambas capas comparan ahora contra los
+    valores reales de `fk.ref_columns`, en su orden exacto; `KeyStore` sigue
+    indexando por PK para la SELECCIÓN de FK (sin cambios), pero la
+    validación usa índices propios por `(tabla, columnas referenciadas)`
+    (`Dataset._ref_value_sets`, con caché perezosa; `_accepted_ref_value_sets`
+    en el cierre). `validate_batch` deja de necesitar `KeyStore`.
+  - **`Dataset.updates` sigue siendo válido tras la cuarentena del cierre
+    referencial.** `_fill_missing_foreign_keys` registra `row_index` como la
+    posición en `dataset.tables[tabla]` EN ESE MOMENTO; si
+    `_enforce_referential_integrity` cuarentena filas después, esas
+    posiciones quedaban desplazadas o pasaban a apuntar a otra fila. Nuevo
+    `Dataset._update_origins` (número de fila original, estable, paralelo a
+    `updates`) y `_resync_updates`: al terminar el cierre, descarta las
+    actualizaciones de filas cuarentenadas y recalcula el `row_index` de las
+    supervivientes contra su posición final.
+  - Nuevo fixture `tests/schemas/fk_unique_target.sql` (fixture 12): FK simple
+    y compuesta hacia una UNIQUE, `ref_columns` en orden distinto al de la PK,
+    y un ciclo diferible donde una dirección referencia una UNIQUE, para
+    probar la cuarentena de un padre referenciado por UNIQUE con cierre
+    transitivo hasta una tercera tabla fuera del ciclo. Tests nuevos en
+    `test_numeric_precision.py` (redondeo, precisión grande, rejilla y
+    exclusividad) y `test_engine.py` (las reproducciones mínimas del hallazgo
+    3 y la regresión de coherencia de `updates` sobre `ciclos_deferrable.sql`,
+    hallazgo 4).
+
+- Revisión de la sesión E (T2.11-T2.13): los dos hallazgos publicados en el PR.
+  - **`NUMERIC(precision, scale)` se respeta de punta a punta.** La IR conservaba
+    `precision`/`scale` pero ni la generación ni `validation.structural` los
+    aplicaban: un `numeric_range` podía producir —y el validador aceptar— valores
+    fuera del rango representable (p. ej. `100.0` en `NUMERIC(3,2)`, cuyo máximo es
+    `9.99`). Nuevo módulo puro `generation/numeric_bounds.py` con la semántica exacta
+    (rango representable, cuantización a la escala y test de encaje) en aritmética de
+    `Decimal`/entero, **nunca floats para contar decimales** (evita el ruido binario).
+    Lo comparten el generador `numeric_range` (recorta el rango al representable y
+    redondea a la escala; `_quantize` pasa a ser exacto con `Decimal`), el `fallback`
+    numérico (no desborda tipos estrechos), `validation.structural` (rechaza un valor
+    que desborda la precisión, nombrando el tipo) y la compilación
+    (`_check_numeric_representable`): un rango cuya intersección con el representable
+    es vacía ⇒ `PlanError` accionable con tabla, columna, rango y tipo, en vez de un
+    `Dataset` inválido en silencio.
+  - **La cuarentena ya no puede romper la integridad referencial final.** En
+    `DeferredPhase` y en `InsertLeveledPhase` una fila padre podía acabar en
+    cuarentena mientras el `KeyStore`, `_key_sets` o el propio lote aún conservaban su
+    clave, dejando hijos aceptados que apuntaban a una fila inexistente. Nueva
+    postcondición de `generate_dataset` (`_enforce_referential_integrity`): recorre el
+    dataset hasta un punto fijo apartando toda fila aceptada con una FK no nula
+    colgante; al cuarentenar un padre, sus dependientes caen también,
+    **transitivamente** (incluido el ciclo diferible en ambos sentidos). No inventa ni
+    reasigna valores (la reparación es H4): solo aísla. `Dataset.levels` pasa a
+    alinearse 1:1 con las filas aceptadas por número de fila (antes recortaba el
+    prefijo del lote y se desalineaba al cuarentenar una fila intermedia); al terminar,
+    el `KeyStore` (nuevo `KeyStore.replace`) y `_key_sets` reflejan únicamente filas
+    aceptadas. `complete_batch` sigue siendo la costura pública de lote y
+    `on_error=abort` no cambia: aborta en la primera fila estructuralmente inválida,
+    antes del cierre.
+  - Tests nuevos: `tests/unit/generation/test_numeric_precision.py` (módulo puro,
+    generador, `numeric[]`, `PlanError` de rango imposible y cuarentena por
+    desbordamiento) y regresiones de integridad referencial en `test_engine.py`
+    (cascada transitiva diferida y por niveles, cero FK colgante, niveles alineados,
+    `abort` sin cambios, y los casos sin corrupción con cero cuarentena y mismo hash).
 
 - Revisión de T1.1 (#8) / T1.2 (#9) tras el merge de #19 (#20). Dos hallazgos
   que afectaban a la validez de los INSERT:

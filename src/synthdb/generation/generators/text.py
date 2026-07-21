@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import Field, model_validator
 
 from synthdb.generation.generators.base import GenContext, GeneratorParams, register
+from synthdb.generation.numeric_bounds import quantize_to_scale, representable_limit
 
 _DEFAULT_TEMPLATE = "{tabla}_{columna}_{n}"
 """Plantilla por defecto (especificacion.md §7.1)."""
@@ -136,7 +137,13 @@ class FallbackGenerator:
         if kind == "integer":
             return ctx.rng.randint(_FALLBACK_INT_LO, _FALLBACK_INT_HI)
         if kind == "numeric":
-            return round(ctx.rng.uniform(0.0, float(_FALLBACK_INT_HI)), 2)
+            hi = float(_FALLBACK_INT_HI)
+            if column.type.precision is not None:
+                # No desbordar NUMERIC(p, s): recorta el rango y redondea a la escala.
+                hi = min(hi, float(representable_limit(column.type.precision, column.type.scale)))
+                raw = ctx.rng.uniform(0.0, hi)
+                return float(quantize_to_scale(raw, column.type.scale))
+            return round(ctx.rng.uniform(0.0, hi), 2)
         if kind == "boolean":
             return ctx.rng.random() < 0.5
         if kind == "uuid":

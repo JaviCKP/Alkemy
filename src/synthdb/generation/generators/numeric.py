@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import bisect
 import math
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Context, Decimal
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -19,7 +20,14 @@ from synthdb.generation.generators.distributions import (
     DistributionSpec,
     LognormalParams,
     NormalParams,
+    UniformParams,
     ZipfParams,
+)
+from synthdb.generation.numeric_bounds import (
+    as_decimal,
+    quantize_to_scale,
+    representable_limit,
+    scale_step,
 )
 
 _INT_BITS_BOUNDS: dict[int, tuple[int, int]] = {
@@ -39,6 +47,20 @@ _BOUNDED_SAMPLE_TRIES = 100
 _ZIPF_MAX_RANKS = 100_000
 """Techo de categorías distintas de zipf: su cola es despreciable más allá, y
 acota el coste de construir la CDF sobre rangos enteros enormes."""
+
+
+def _local_decimal_context(*values: Decimal) -> Context:
+    """Construye un contexto local suficiente para operar con `values` exactos."""
+    required = 0
+    for value in values:
+        if not value.is_finite():
+            continue
+        exponent = value.as_tuple().exponent
+        if not isinstance(exponent, int):
+            continue
+        integer_digits = max(value.adjusted() + 1, 1) if value else 1
+        required += integer_digits + max(-exponent, 0)
+    return Context(prec=max(required + 8, 28))
 
 
 class NumericRangeParams(GeneratorParams):
@@ -91,15 +113,67 @@ class NumericRangeGenerator:
                     f"numeric_range: rango entero vacío en {ctx.table}.{ctx.column.name} "
                     f"(min>max tras aplicar exclusividades y la cota del tipo)."
                 )
-            value = int(round(self._quantize(self._sample(ctx, float(lo), float(hi)))))
-            return max(lo, min(hi, value))
-        lo_f, hi_f = self._float_bounds()
-        if lo_f > hi_f:
+            sample = self._quantize(self._sample(ctx, float(lo), float(hi)), self._p.round_to)
+            return max(lo, min(hi, int(round(sample))))
+        return self._generate_numeric(ctx)
+
+    def _generate_numeric(self, ctx: GenContext) -> float:
+        """Rama `numeric`: respeta `NUMERIC(precision, scale)` cuando el tipo lo declara.
+
+        Recorta el rango al representable por el tipo y redondea el resultado a la
+        escala, con el mismo criterio exacto que `validation.structural`. Un
+        `numeric` sin precisión declarada (p. ej. `double precision`) se comporta
+        como hasta ahora: rango por defecto `[0, 1]` y `float` sin cuantizar.
+        """
+        type_spec = ctx.column.type
+        if type_spec.precision is None:
+            lo, hi = self._float_bounds()
+            step = self._p.round_to
+            if lo > hi:
+                raise ValueError(
+                    f"numeric_range: rango vacío en {ctx.table}.{ctx.column.name} "
+                    f"(min>max tras recortar al rango representable del tipo)."
+                )
+            x = max(lo, min(hi, self._quantize(self._sample(ctx, lo, hi), step)))
+            return self._apply_float_exclusivity(x, lo, hi, step)
+
+        # Las cotas del tipo y el paso natural se mantienen como Decimal hasta
+        # terminar la semántica NUMERIC. Convertir scale_step a float hace que
+        # NUMERIC(1000, 500) use 0.0 y provoque DivisionByZero en _quantize.
+        limit = representable_limit(type_spec.precision, type_spec.scale)
+        negative_limit = limit.copy_negate()
+        decimal_lo = as_decimal(self._p.min) if self._p.min is not None else Decimal("0")
+        decimal_hi = as_decimal(self._p.max) if self._p.max is not None else Decimal("1")
+        decimal_lo = max(decimal_lo, negative_limit)
+        decimal_hi = min(decimal_hi, limit)
+        if decimal_lo > decimal_hi:
             raise ValueError(
-                f"numeric_range: rango vacío en {ctx.table}.{ctx.column.name} (min>max)."
+                f"numeric_range: rango vacío en {ctx.table}.{ctx.column.name} "
+                f"(min>max tras recortar al rango representable del tipo)."
             )
-        x = max(lo_f, min(hi_f, self._quantize(self._sample(ctx, lo_f, hi_f))))
-        return self._apply_float_exclusivity(x, lo_f, hi_f)
+
+        sampled = self._sample_numeric(ctx, decimal_lo, decimal_hi)
+        explicit_step = as_decimal(self._p.round_to) if self._p.round_to is not None else None
+        if explicit_step is None:
+            decimal_step = scale_step(type_spec.scale)
+            decimal_x = quantize_to_scale(sampled, type_spec.scale)
+        else:
+            decimal_step = explicit_step
+            decimal_x = self._quantize_decimal(sampled, decimal_step)
+        decimal_x = max(decimal_lo, min(decimal_hi, decimal_x))
+        if self._p.min_exclusive and decimal_x <= decimal_lo:
+            decimal_x = _local_decimal_context(decimal_lo, decimal_step).add(
+                decimal_lo, decimal_step
+            )
+        if self._p.max_exclusive and decimal_x >= decimal_hi:
+            decimal_x = _local_decimal_context(decimal_hi, decimal_step).subtract(
+                decimal_hi, decimal_step
+            )
+        decimal_x = max(decimal_lo, min(decimal_hi, decimal_x))
+
+        # El contrato público del generador sigue siendo float; la conversión es
+        # deliberadamente el último paso, después de cuantizar a la escala exacta.
+        return float(quantize_to_scale(decimal_x, type_spec.scale))
 
     def _int_bounds(self, ctx: GenContext) -> tuple[int, int]:
         bit_lo, bit_hi = _bit_bounds(ctx.column.type.bits)
@@ -118,17 +192,35 @@ class NumericRangeGenerator:
         hi = self._p.max if self._p.max is not None else 1.0
         return lo, hi
 
-    def _quantize(self, x: float) -> float:
-        if self._p.round_to is None:
-            return x
-        return round(x / self._p.round_to) * self._p.round_to
+    def _quantize(self, x: float, step: float | None) -> float:
+        """Redondea `x` al múltiplo de `step` con aritmética exacta de `Decimal`.
 
-    def _apply_float_exclusivity(self, x: float, lo: float, hi: float) -> float:
-        step = self._p.round_to if self._p.round_to else max((hi - lo) * 1e-9, 1e-9)
+        Usar `Decimal` (no ``round(x / step) * step`` en coma flotante) evita el
+        ruido binario que dejaría 0.37 como 0.37000000000000005 (CLAUDE.md). Los
+        empates se alejan de cero, como PostgreSQL al insertar en `NUMERIC`
+        (`numeric_bounds.quantize_to_scale` usa el mismo criterio).
+        """
+        if step is None:
+            return x
+        value = Decimal(str(x))
+        s = step if isinstance(step, Decimal) else Decimal(str(step))
+        return float(self._quantize_decimal(value, s))
+
+    def _quantize_decimal(self, value: Decimal, step: Decimal) -> Decimal:
+        """Redondea un `Decimal` al múltiplo de un paso también exacto."""
+        if not step:
+            raise ValueError("numeric_range: el paso de cuantización no puede ser 0.")
+        ctx = _local_decimal_context(value, step)
+        quotient = ctx.divide(value, step)
+        integral = quotient.to_integral_value(rounding=ROUND_HALF_UP, context=ctx)
+        return ctx.multiply(integral, step)
+
+    def _apply_float_exclusivity(self, x: float, lo: float, hi: float, step: float | None) -> float:
+        effective = step if step else max((hi - lo) * 1e-9, 1e-9)
         if self._p.min_exclusive and x <= lo:
-            x = lo + step
+            x = lo + effective
         if self._p.max_exclusive and x >= hi:
-            x = hi - step
+            x = hi - effective
         return max(lo, min(hi, x))
 
     def _sample(self, ctx: GenContext, lo: float, hi: float) -> float:
@@ -142,6 +234,69 @@ class NumericRangeGenerator:
         if isinstance(params, ZipfParams):
             return float(self._sample_zipf(ctx, lo, hi, params))
         return ctx.rng.uniform(lo, hi)  # UniformParams
+
+    def _sample_numeric(self, ctx: GenContext, lo: Decimal, hi: Decimal) -> Decimal:
+        """Muestrea una columna NUMERIC sin degradar sus límites a `float`."""
+        if hi <= lo:
+            return lo
+        params = self._p.distribution.params
+        if isinstance(params, UniformParams):
+            local = _local_decimal_context(lo, hi)
+            width = local.subtract(hi, lo)
+            return local.add(lo, local.multiply(width, as_decimal(ctx.rng.random())))
+        if isinstance(params, NormalParams):
+            return self._sample_normal_numeric(ctx, lo, hi, params)
+        if isinstance(params, LognormalParams):
+            return self._sample_lognormal_numeric(ctx, lo, hi, params)
+        if isinstance(params, ZipfParams):
+            lo_i = int(lo.to_integral_value(rounding=ROUND_CEILING))
+            hi_i = int(hi.to_integral_value(rounding=ROUND_FLOOR))
+            return Decimal(self._sample_zipf(ctx, lo_i, hi_i, params))
+        raise AssertionError(f"distribución numérica no soportada: {type(params).__name__}")
+
+    def _sample_normal_numeric(
+        self, ctx: GenContext, lo: Decimal, hi: Decimal, params: NormalParams
+    ) -> Decimal:
+        """Muestrea una normal recortada con sus cotas almacenadas como `Decimal`."""
+        local = _local_decimal_context(lo, hi)
+        mean = (
+            as_decimal(params.mean)
+            if params.mean is not None
+            else local.divide(local.add(lo, hi), Decimal(2))
+        )
+        std = (
+            as_decimal(params.std)
+            if params.std is not None
+            else local.divide(local.subtract(hi, lo), Decimal(6))
+        )
+        if std <= 0:
+            return mean
+        for _ in range(_BOUNDED_SAMPLE_TRIES):
+            sample = local.add(mean, local.multiply(std, as_decimal(ctx.rng.gauss(0.0, 1.0))))
+            if lo <= sample <= hi:
+                return sample
+        sample = local.add(mean, local.multiply(std, as_decimal(ctx.rng.gauss(0.0, 1.0))))
+        return max(lo, min(hi, sample))
+
+    def _sample_lognormal_numeric(
+        self, ctx: GenContext, lo: Decimal, hi: Decimal, params: LognormalParams
+    ) -> Decimal:
+        """Muestrea una lognormal recortada sin pasar por cotas `float`."""
+        local = _local_decimal_context(lo, hi)
+        median = (
+            as_decimal(params.median)
+            if params.median is not None
+            else local.divide(local.add(lo, hi), Decimal(2))
+        )
+        if median <= 0:
+            median = max(hi, Decimal(1))
+        sigma = params.sigma if params.sigma is not None else 0.5
+        for _ in range(_BOUNDED_SAMPLE_TRIES):
+            sample = local.multiply(median, as_decimal(ctx.rng.lognormvariate(0.0, sigma)))
+            if lo <= sample <= hi:
+                return sample
+        sample = local.multiply(median, as_decimal(ctx.rng.lognormvariate(0.0, sigma)))
+        return max(lo, min(hi, sample))
 
     def _sample_normal(self, ctx: GenContext, lo: float, hi: float, p: NormalParams) -> float:
         mean = p.mean if p.mean is not None else (lo + hi) / 2

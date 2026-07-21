@@ -77,7 +77,7 @@ def test_rules_se_guardan_sin_interpretar() -> None:
     rules = config.tables["compraventas"].rules
     assert rules == [
         "fecha >= date(parent(vivienda_id).anio_construccion, 1, 1)",
-        "precio = superficie_from_parent(vivienda_id) * ref('precio_m2_base') * noise(0.2)",
+        "precio = parent(vivienda_id).superficie_m2 * ref('precio_m2_base') * noise(0.2)",
     ]
 
 
