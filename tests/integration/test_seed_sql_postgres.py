@@ -241,7 +241,7 @@ def test_empty_and_non_empty_enum_arrays_load_into_postgres() -> None:
         "DROP TABLE IF EXISTS moods CASCADE; DROP TYPE IF EXISTS mood_enum;"
         "CREATE TYPE mood_enum AS ENUM ("
         "'happy', 'sad', 'has''quote,comma" + chr(92) + "backslash', 'café ñ 日本');"
-        "CREATE TABLE moods (id INT PRIMARY KEY, tags mood_enum[] NOT NULL);"
+        "CREATE TABLE moods (id SERIAL PRIMARY KEY, tags mood_enum[] NOT NULL);"
     )
 
     with psycopg.connect(url, autocommit=True) as connection:
