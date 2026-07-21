@@ -488,6 +488,42 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- Revisión de la sesión E (T2.11-T2.13): los dos hallazgos publicados en el PR.
+  - **`NUMERIC(precision, scale)` se respeta de punta a punta.** La IR conservaba
+    `precision`/`scale` pero ni la generación ni `validation.structural` los
+    aplicaban: un `numeric_range` podía producir —y el validador aceptar— valores
+    fuera del rango representable (p. ej. `100.0` en `NUMERIC(3,2)`, cuyo máximo es
+    `9.99`). Nuevo módulo puro `generation/numeric_bounds.py` con la semántica exacta
+    (rango representable, cuantización a la escala y test de encaje) en aritmética de
+    `Decimal`/entero, **nunca floats para contar decimales** (evita el ruido binario).
+    Lo comparten el generador `numeric_range` (recorta el rango al representable y
+    redondea a la escala; `_quantize` pasa a ser exacto con `Decimal`), el `fallback`
+    numérico (no desborda tipos estrechos), `validation.structural` (rechaza un valor
+    que desborda la precisión, nombrando el tipo) y la compilación
+    (`_check_numeric_representable`): un rango cuya intersección con el representable
+    es vacía ⇒ `PlanError` accionable con tabla, columna, rango y tipo, en vez de un
+    `Dataset` inválido en silencio.
+  - **La cuarentena ya no puede romper la integridad referencial final.** En
+    `DeferredPhase` y en `InsertLeveledPhase` una fila padre podía acabar en
+    cuarentena mientras el `KeyStore`, `_key_sets` o el propio lote aún conservaban su
+    clave, dejando hijos aceptados que apuntaban a una fila inexistente. Nueva
+    postcondición de `generate_dataset` (`_enforce_referential_integrity`): recorre el
+    dataset hasta un punto fijo apartando toda fila aceptada con una FK no nula
+    colgante; al cuarentenar un padre, sus dependientes caen también,
+    **transitivamente** (incluido el ciclo diferible en ambos sentidos). No inventa ni
+    reasigna valores (la reparación es H4): solo aísla. `Dataset.levels` pasa a
+    alinearse 1:1 con las filas aceptadas por número de fila (antes recortaba el
+    prefijo del lote y se desalineaba al cuarentenar una fila intermedia); al terminar,
+    el `KeyStore` (nuevo `KeyStore.replace`) y `_key_sets` reflejan únicamente filas
+    aceptadas. `complete_batch` sigue siendo la costura pública de lote y
+    `on_error=abort` no cambia: aborta en la primera fila estructuralmente inválida,
+    antes del cierre.
+  - Tests nuevos: `tests/unit/generation/test_numeric_precision.py` (módulo puro,
+    generador, `numeric[]`, `PlanError` de rango imposible y cuarentena por
+    desbordamiento) y regresiones de integridad referencial en `test_engine.py`
+    (cascada transitiva diferida y por niveles, cero FK colgante, niveles alineados,
+    `abort` sin cambios, y los casos sin corrupción con cero cuarentena y mismo hash).
+
 - Revisión de T1.1 (#8) / T1.2 (#9) tras el merge de #19 (#20). Dos hallazgos
   que afectaban a la validez de los INSERT:
   - Familia de coma flotante binaria (`real`, `float4`, `double precision`,

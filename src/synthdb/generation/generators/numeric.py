@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import bisect
 import math
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -20,6 +21,11 @@ from synthdb.generation.generators.distributions import (
     LognormalParams,
     NormalParams,
     ZipfParams,
+)
+from synthdb.generation.numeric_bounds import (
+    quantize_to_scale,
+    representable_limit,
+    scale_step,
 )
 
 _INT_BITS_BOUNDS: dict[int, tuple[int, int]] = {
@@ -91,15 +97,38 @@ class NumericRangeGenerator:
                     f"numeric_range: rango entero vacío en {ctx.table}.{ctx.column.name} "
                     f"(min>max tras aplicar exclusividades y la cota del tipo)."
                 )
-            value = int(round(self._quantize(self._sample(ctx, float(lo), float(hi)))))
-            return max(lo, min(hi, value))
-        lo_f, hi_f = self._float_bounds()
-        if lo_f > hi_f:
+            sample = self._quantize(self._sample(ctx, float(lo), float(hi)), self._p.round_to)
+            return max(lo, min(hi, int(round(sample))))
+        return self._generate_numeric(ctx)
+
+    def _generate_numeric(self, ctx: GenContext) -> float:
+        """Rama `numeric`: respeta `NUMERIC(precision, scale)` cuando el tipo lo declara.
+
+        Recorta el rango al representable por el tipo y redondea el resultado a la
+        escala, con el mismo criterio exacto que `validation.structural`. Un
+        `numeric` sin precisión declarada (p. ej. `double precision`) se comporta
+        como hasta ahora: rango por defecto `[0, 1]` y `float` sin cuantizar.
+        """
+        type_spec = ctx.column.type
+        lo, hi = self._float_bounds()
+        step = self._p.round_to
+        if type_spec.precision is not None:
+            limit = float(representable_limit(type_spec.precision, type_spec.scale))
+            lo, hi = max(lo, -limit), min(hi, limit)
+            if step is None:
+                # La escala del tipo es el paso natural: NUMERIC(_, 2) ⇒ 0.01.
+                step = float(scale_step(type_spec.scale))
+        if lo > hi:
             raise ValueError(
-                f"numeric_range: rango vacío en {ctx.table}.{ctx.column.name} (min>max)."
+                f"numeric_range: rango vacío en {ctx.table}.{ctx.column.name} "
+                f"(min>max tras recortar al rango representable del tipo)."
             )
-        x = max(lo_f, min(hi_f, self._quantize(self._sample(ctx, lo_f, hi_f))))
-        return self._apply_float_exclusivity(x, lo_f, hi_f)
+        x = max(lo, min(hi, self._quantize(self._sample(ctx, lo, hi), step)))
+        x = self._apply_float_exclusivity(x, lo, hi, step)
+        if type_spec.precision is not None:
+            # Garantiza que el valor almacenado es exactamente representable.
+            return float(quantize_to_scale(x, type_spec.scale))
+        return x
 
     def _int_bounds(self, ctx: GenContext) -> tuple[int, int]:
         bit_lo, bit_hi = _bit_bounds(ctx.column.type.bits)
@@ -118,17 +147,23 @@ class NumericRangeGenerator:
         hi = self._p.max if self._p.max is not None else 1.0
         return lo, hi
 
-    def _quantize(self, x: float) -> float:
-        if self._p.round_to is None:
-            return x
-        return round(x / self._p.round_to) * self._p.round_to
+    def _quantize(self, x: float, step: float | None) -> float:
+        """Redondea `x` al múltiplo de `step` con aritmética exacta de `Decimal`.
 
-    def _apply_float_exclusivity(self, x: float, lo: float, hi: float) -> float:
-        step = self._p.round_to if self._p.round_to else max((hi - lo) * 1e-9, 1e-9)
+        Usar `Decimal` (no ``round(x / step) * step`` en coma flotante) evita el
+        ruido binario que dejaría 0.37 como 0.37000000000000005 (CLAUDE.md).
+        """
+        if step is None:
+            return x
+        s = Decimal(str(step))
+        return float((Decimal(str(x)) / s).to_integral_value(rounding=ROUND_HALF_EVEN) * s)
+
+    def _apply_float_exclusivity(self, x: float, lo: float, hi: float, step: float | None) -> float:
+        effective = step if step else max((hi - lo) * 1e-9, 1e-9)
         if self._p.min_exclusive and x <= lo:
-            x = lo + step
+            x = lo + effective
         if self._p.max_exclusive and x >= hi:
-            x = hi - step
+            x = hi - effective
         return max(lo, min(hi, x))
 
     def _sample(self, ctx: GenContext, lo: float, hi: float) -> float:

@@ -225,3 +225,162 @@ def test_multitenant_composite_cycle_and_arrays_are_completed() -> None:
         for row in dataset.tables["matches"]
     )
     assert dataset.quarantine == {}
+
+
+# --- Integridad referencial tras cuarentena (revisión sesión E, hallazgo 2) ----
+
+
+def _null_field_of_id(marker: str, target_id: int, field: str):
+    """`complete_batch` que anula `field` de la fila con `id==target_id`.
+
+    Fuerza la cuarentena estructural de una fila concreta (un NOT NULL a NULL) para
+    observar el cierre de la cuarentena. `marker` distingue la tabla del lote
+    (p. ej. solo `pedidos` tiene `fecha`), ya que `complete_batch` no recibe el
+    nombre de la tabla.
+    """
+
+    def corrupt(batch: list[dict[str, Any]]) -> None:
+        for row in batch:
+            if marker in row and row.get("id") == target_id:
+                row[field] = None
+
+    return corrupt
+
+
+def test_deferred_cycle_cascades_quarantine_to_referencing_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("fecha", 1, "fecha"))
+    dataset = generate_dataset(
+        _schema("ciclos_deferrable.sql"),
+        Config(
+            seed=0,
+            tables={"pedidos": TableConfig(rows=200), "facturas": TableConfig(rows=200)},
+        ),
+    )
+    pedido_ids = {row["id"] for row in dataset.tables["pedidos"]}
+    factura_ids = {row["id"] for row in dataset.tables["facturas"]}
+    assert 1 not in pedido_ids  # el padre corrupto se apartó
+    # Ninguna FK no nula queda colgando en ninguno de los dos sentidos del ciclo.
+    assert all(row["pedido_id"] in pedido_ids for row in dataset.tables["facturas"])
+    assert all(row["factura_id"] in factura_ids for row in dataset.tables["pedidos"])
+    # Toda factura que apuntaba al pedido 1 cayó también (cierre de la cuarentena).
+    assert all(row["pedido_id"] != 1 for row in dataset.tables["facturas"])
+    assert "facturas" in dataset.quarantine  # el cierre alcanzó a las facturas
+    # KeyStore/_key_sets reflejan solo las filas aceptadas.
+    assert dataset._key_sets["pedidos"] == {(pid,) for pid in pedido_ids}
+    assert dataset._key_sets["facturas"] == {(fid,) for fid in factura_ids}
+
+
+def test_deferred_cycle_abort_still_raises_on_the_corrupted_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("fecha", 1, "fecha"))
+    with pytest.raises(GenerationError, match=r"tabla pedidos"):
+        generate_dataset(
+            _schema("ciclos_deferrable.sql"),
+            Config(
+                seed=0,
+                tables={"pedidos": TableConfig(rows=200), "facturas": TableConfig(rows=200)},
+                output=OutputConfig(on_error="abort"),
+            ),
+        )
+
+
+def test_deferred_cycle_without_corruption_is_integral_and_deterministic() -> None:
+    def run(batch_size: int) -> Dataset:
+        return generate_dataset(
+            _schema("ciclos_deferrable.sql"),
+            Config(
+                seed=0,
+                tables={"pedidos": TableConfig(rows=200), "facturas": TableConfig(rows=200)},
+                output=OutputConfig(batch_size=batch_size),
+            ),
+        )
+
+    small, large = run(7), run(5000)
+    assert small.quarantine == {}
+    assert _digest(small) == _digest(large)
+
+
+def test_leveled_root_corruption_cascades_to_its_whole_subtree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # El único root (nivel 0, capacidad 1) sostiene todo el árbol: apartarlo debe
+    # arrastrar transitivamente a toda su descendencia, sin dejar ninguna colgando.
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("manager_id", 1, "nombre"))
+    dataset = generate_dataset(
+        _schema("rrhh_autoref_nullable.sql"),
+        Config(
+            seed=3,
+            tables={"empleados": TableConfig(rows=40)},
+            hierarchy={"empleados.manager_id": HierarchyConfig(branching=3, max_depth=4)},
+        ),
+    )
+    assert dataset.tables["empleados"] == []
+    assert dataset.levels["empleados"] == []
+    assert len(dataset.quarantine["empleados"]) == 40
+
+
+def test_leveled_intermediate_corruption_keeps_levels_aligned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Apartar un nodo intermedio arrastra su subárbol pero deja supervivientes: los
+    # niveles deben seguir 1:1 con las filas aceptadas (no basta con recortar el
+    # prefijo del lote).
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("manager_id", 2, "nombre"))
+    dataset = generate_dataset(
+        _schema("rrhh_autoref_nullable.sql"),
+        Config(
+            seed=3,
+            tables={"empleados": TableConfig(rows=40)},
+            hierarchy={"empleados.manager_id": HierarchyConfig(branching=3, max_depth=4)},
+        ),
+    )
+    rows = dataset.tables["empleados"]
+    levels = dataset.levels["empleados"]
+    ids = {row["id"] for row in rows}
+    assert rows  # hay supervivientes (no colapsó todo el árbol)
+    assert 2 not in ids
+    assert all(row["manager_id"] != 2 for row in rows)  # los subordinados directos cayeron
+    # Ninguna autorreferencia no nula queda colgando y los niveles siguen alineados.
+    assert all(row["manager_id"] is None or row["manager_id"] in ids for row in rows)
+    assert len(rows) == len(levels)
+    by_level = {row["id"]: level for row, level in zip(rows, levels, strict=True)}
+    for row, level in zip(rows, levels, strict=True):
+        if row["manager_id"] is not None:
+            assert by_level[row["manager_id"]] == level - 1
+
+
+def test_leveled_abort_still_raises_on_the_corrupted_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("manager_id", 1, "nombre"))
+    with pytest.raises(GenerationError, match=r"tabla empleados"):
+        generate_dataset(
+            _schema("rrhh_autoref_nullable.sql"),
+            Config(
+                seed=3,
+                tables={"empleados": TableConfig(rows=40)},
+                hierarchy={"empleados.manager_id": HierarchyConfig(branching=3, max_depth=4)},
+                output=OutputConfig(on_error="abort"),
+            ),
+        )
+
+
+def test_leveled_without_corruption_is_integral_and_deterministic() -> None:
+    def run(batch_size: int) -> Dataset:
+        return generate_dataset(
+            _schema("rrhh_autoref_nullable.sql"),
+            Config(
+                seed=3,
+                tables={"empleados": TableConfig(rows=40)},
+                hierarchy={"empleados.manager_id": HierarchyConfig(branching=3, max_depth=4)},
+                output=OutputConfig(batch_size=batch_size),
+            ),
+        )
+
+    small, large = run(6), run(5000)
+    assert small.quarantine == {}
+    assert len(small.tables["empleados"]) == len(small.levels["empleados"]) == 40
+    assert _digest(small) == _digest(large)

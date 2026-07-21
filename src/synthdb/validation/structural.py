@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 
 from synthdb.generation.context import RowContext, mapping_resolver
 from synthdb.generation.keystore import KeyStore
+from synthdb.generation.numeric_bounds import effective_scale, fits, representable_limit
 from synthdb.generation.seeding import rng_for_row, seed_for_table
 from synthdb.graph.dependency import index_tables
 from synthdb.ir.plans import TablePlan
@@ -197,6 +198,17 @@ def _type_constraint_error(value: Any, column: ColumnSpec) -> str | None:
             and element not in column.enum_values
         ):
             return f"valor {element!r} fuera del enum {column.enum_values!r}"
+        if (
+            column.type.kind == "numeric"
+            and column.type.precision is not None
+            and not fits(element, column.type.precision, column.type.scale)
+        ):
+            scale = effective_scale(column.type.scale)
+            limit = representable_limit(column.type.precision, column.type.scale)
+            return (
+                f"valor {element!r} no representable en NUMERIC({column.type.precision}, "
+                f"{scale}): el máximo representable es ±{limit}"
+            )
         if (
             column.type.kind == "timestamp"
             and column.type.with_timezone is True

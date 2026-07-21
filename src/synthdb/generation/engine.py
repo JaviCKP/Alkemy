@@ -24,6 +24,7 @@ from synthdb.generation.fk import (
 )
 from synthdb.generation.generators import Generator, resolve
 from synthdb.generation.keystore import KeyStore
+from synthdb.generation.numeric_bounds import as_decimal, effective_scale, representable_limit
 from synthdb.generation.seeding import rng_for_row, seed_for_table
 from synthdb.graph.dependency import analyze_structure, index_tables
 from synthdb.graph.strategies import resolve_cycles
@@ -220,6 +221,7 @@ def generate_dataset(spec: SchemaSpec, config: Config) -> Dataset:
         elif isinstance(phase, UpdatePhase):
             _fill_missing_foreign_keys(phase.table, tuple(phase.columns), config, dataset, store)
 
+    _enforce_referential_integrity(interpreted, dataset, store)
     return dataset
 
 
@@ -264,6 +266,7 @@ def _compile_tables(
             column = columns_by_name[column_plan.column]
             generator: Generator | None = None
             generator_spec = _spec_with_ir_bounds(column_plan.generator, column)
+            _check_numeric_representable(generator_spec, column, table.name)
             if (
                 generator_spec is not None
                 and generator_spec.type != "fk"
@@ -326,6 +329,41 @@ def _spec_with_ir_bounds(
             continue
         params.setdefault(name, value)
     return generator_spec.model_copy(update={"type": target_type, "params": params})
+
+
+def _check_numeric_representable(
+    spec: GeneratorSpec | None, column: ColumnSpec, table_name: str
+) -> None:
+    """Rechaza en compilación un rango que ningún valor de `NUMERIC(p, s)` cumple.
+
+    Un `NUMERIC(p, s)` solo almacena magnitudes hasta ``(10**p - 1)/10**s``. Si el
+    rango configurado (o el derivado de un CHECK) queda por completo fuera de esa
+    ventana, ninguna fila sería válida: es una contradicción de plan que se rechaza
+    con un error accionable, no una fila que cuarentenar (CLAUDE.md).
+    """
+    if spec is None or spec.type != "numeric_range":
+        return
+    type_spec = column.type
+    if type_spec.kind != "numeric" or type_spec.precision is None:
+        return
+    limit = representable_limit(type_spec.precision, type_spec.scale)
+    raw_min = spec.params.get("min")
+    raw_max = spec.params.get("max")
+    low = as_decimal(raw_min) if raw_min is not None else -limit
+    high = as_decimal(raw_max) if raw_max is not None else limit
+    if max(low, -limit) <= min(high, limit):
+        return
+    scale = effective_scale(type_spec.scale)
+    requested = (
+        f"[{raw_min if raw_min is not None else 'sin mínimo'}, "
+        f"{raw_max if raw_max is not None else 'sin máximo'}]"
+    )
+    raise PlanError(
+        f"tabla {table_name}, columna {column.name}: el rango {requested} del generador "
+        f"'numeric_range' no contiene ningún valor representable en "
+        f"NUMERIC({type_spec.precision}, {scale}) (máximo representable ±{limit}). Ajusta "
+        f"el rango en el YAML o el tipo de la columna."
+    )
 
 
 def _validate_rule_references(rule: Rule, table: TableSpec, spec: SchemaSpec) -> None:
@@ -824,7 +862,11 @@ def _generate_leveled_table(
         before = len(dataset.tables[compiled.spec.name])
         _accept_batch(compiled, batch, config, dataset, store)
         accepted = dataset.tables[compiled.spec.name][before:]
-        dataset.levels[compiled.spec.name].extend(levels[start : start + len(accepted)])
+        # Alinea cada nivel con SU fila aceptada por número de fila: si el lote
+        # cuarentena una fila intermedia, los niveles no se desplazan.
+        dataset.levels[compiled.spec.name].extend(
+            levels[dataset._row_numbers[compiled.spec.name][id(row)]] for row in accepted
+        )
 
 
 def _level_numbers(total: int, branching: int, max_depth: int) -> list[int]:
@@ -890,6 +932,115 @@ def _fill_missing_foreign_keys(
                 dataset._parents[table_name][id(row)][local] = parent
             if changed:
                 dataset.updates.append(DatasetUpdate(table_name, position, changed))
+
+
+def _enforce_referential_integrity(spec: SchemaSpec, dataset: Dataset, store: KeyStore) -> None:
+    """Postcondición de `generate_dataset`: ninguna FK no nula queda colgando.
+
+    Durante la generación diferida (`DeferredPhase`) y por niveles
+    (`InsertLeveledPhase`) una fila padre puede acabar en cuarentena después de que
+    sus hijos ya se aceptaran contra una clave que aún vivía (en el lote, el
+    ``KeyStore`` o ``_key_sets``). Aquí, con todas las fases ya ejecutadas, se
+    recorre el dataset hasta un punto fijo apartando toda fila aceptada cuya FK no
+    nula apunte a una fila que no está aceptada; al cuarentenar un padre, sus
+    dependientes caen también, transitivamente. No se inventan ni reasignan valores
+    (la reparación es H4): aquí solo se aísla.
+
+    ``Dataset.levels`` se mantiene alineado 1:1 con las filas aceptadas y, al
+    terminar, el ``KeyStore`` y ``_key_sets`` reflejan únicamente filas aceptadas.
+    Para un dataset ya íntegro (el caso normal) es un no-op: cero cuarentena nueva.
+    """
+    by_name = index_tables(spec)
+    changed = True
+    while changed:
+        changed = False
+        accepted = _accepted_key_sets(spec, dataset)
+        for table in spec.tables:
+            rows = dataset.tables.get(table.name)
+            if not rows or not table.foreign_keys:
+                continue
+            keep: list[bool] = []
+            bad: list[ValidationIssue] = []
+            for row in rows:
+                columns = _dangling_fk_columns(row, table, by_name, accepted)
+                keep.append(not columns)
+                if columns:
+                    bad.append(
+                        (
+                            row,
+                            columns,
+                            f"FK ({', '.join(columns)}) apunta a una fila que quedó en "
+                            f"cuarentena; se aísla para no dejar una referencia colgante",
+                        )
+                    )
+            if bad:
+                changed = True
+                _drop_unkept_rows(dataset, table.name, keep)
+                dataset.quarantine.setdefault(table.name, []).extend(bad)
+    _resync_key_stores(spec, dataset, store)
+
+
+def _accepted_key_sets(spec: SchemaSpec, dataset: Dataset) -> dict[str, set[tuple[Any, ...]]]:
+    """Claves primarias de las filas ACTUALMENTE aceptadas, por tabla."""
+    result: dict[str, set[tuple[Any, ...]]] = {}
+    for table in spec.tables:
+        if not table.primary_key:
+            continue
+        result[table.name] = {
+            tuple(row.get(column) for column in table.primary_key)
+            for row in dataset.tables.get(table.name, [])
+        }
+    return result
+
+
+def _dangling_fk_columns(
+    row: dict[str, Any],
+    table: TableSpec,
+    by_name: dict[str, TableSpec],
+    accepted: dict[str, set[tuple[Any, ...]]],
+) -> tuple[str, ...]:
+    """Columnas de las FK no nulas de `row` cuyo padre no figura entre los aceptados.
+
+    Refleja la misma semántica que ``validation.structural._foreign_key_errors``:
+    una FK con algún NULL se salta (su nulabilidad ya se validó) y la clave del hijo
+    se compara contra las PK de las filas padre aceptadas.
+    """
+    dangling: list[str] = []
+    for fk in table.foreign_keys:
+        values = tuple(row.get(column) for column in fk.columns)
+        if any(value is None for value in values):
+            continue
+        parent = by_name.get(fk.ref_table)
+        if parent is None:
+            continue
+        parent_keys = accepted.get(parent.name)
+        if parent_keys is None:
+            continue
+        if values not in parent_keys:
+            dangling.extend(fk.columns)
+    return tuple(dict.fromkeys(dangling))
+
+
+def _drop_unkept_rows(dataset: Dataset, table_name: str, keep: list[bool]) -> None:
+    """Filtra filas y, si la tabla es por niveles, sus niveles con la misma máscara."""
+    rows = dataset.tables[table_name]
+    dataset.tables[table_name] = [row for row, ok in zip(rows, keep, strict=True) if ok]
+    levels = dataset.levels.get(table_name)
+    if levels is not None:
+        dataset.levels[table_name] = [level for level, ok in zip(levels, keep, strict=True) if ok]
+
+
+def _resync_key_stores(spec: SchemaSpec, dataset: Dataset, store: KeyStore) -> None:
+    """Deja `KeyStore` y ``_key_sets`` reflejando únicamente filas aceptadas."""
+    for table in spec.tables:
+        if not table.primary_key:
+            continue
+        keys = [
+            tuple(row[column] for column in table.primary_key)
+            for row in dataset.tables.get(table.name, [])
+        ]
+        dataset._key_sets[table.name] = set(keys)
+        store.replace(table.name, keys)
 
 
 def _install_run_context(spec: SchemaSpec, dataset: Dataset) -> None:

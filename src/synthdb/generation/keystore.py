@@ -57,6 +57,21 @@ class KeyStore:
         for key in keys:
             bucket.append(key if isinstance(key, tuple) else (key,))
 
+    def replace(self, table: str, keys: Iterable[Any]) -> None:
+        """Reemplaza TODAS las claves de `table` por `keys` (normalizadas a tupla).
+
+        Rompe deliberadamente la naturaleza *append-only* del almacén para un único
+        uso: cuando la generación ya ha terminado y el motor cuarentena filas, deja
+        el `KeyStore` reflejando solo las aceptadas. No se llama durante la selección
+        de FKs, así que no altera la estabilidad de índices que esa fase necesita.
+
+        Args:
+            table: Tabla cuyas claves se sustituyen.
+            keys: Claves aceptadas; cada una un escalar o una tupla (se envuelve un
+                escalar en `(valor,)`, igual que `add`).
+        """
+        self._by_table[table] = [key if isinstance(key, tuple) else (key,) for key in keys]
+
     def count(self, table: str) -> int:
         """Devuelve cuántas claves hay almacenadas para `table` (0 si no existe)."""
         return len(self._by_table.get(table, ()))
