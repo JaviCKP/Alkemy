@@ -8,7 +8,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from synthdb.generation.context import RowContext, mapping_resolver
-from synthdb.generation.keystore import KeyStore
 from synthdb.generation.numeric_bounds import effective_scale, fits, representable_limit
 from synthdb.generation.seeding import rng_for_row, seed_for_table
 from synthdb.graph.dependency import index_tables
@@ -28,7 +27,6 @@ def validate_batch(
     rows: list[dict[str, Any]],
     table_plan: TablePlan,
     spec: SchemaSpec,
-    keystore: KeyStore,
     dataset: Dataset,
 ) -> tuple[list[dict[str, Any]], list[ValidationIssue]]:
     """Validate a generated batch against the IR and all compiled YAML rules.
@@ -40,13 +38,7 @@ def validate_batch(
     table = next(table for table in spec.tables if table.name == table_plan.table)
     compiled = dataset._compiled.get(table.name)
     unique_sets = dataset._validation_unique.setdefault(table.name, {})
-    local_parent_keys = {
-        keystore.get(table.name, index) for index in range(keystore.count(table.name))
-    }
-    if table.primary_key:
-        local_parent_keys.update(
-            tuple(row.get(column) for column in table.primary_key) for row in rows
-        )
+    self_parent_values = _self_referenced_values(table, rows, dataset)
     ok: list[dict[str, Any]] = []
     bad: list[ValidationIssue] = []
 
@@ -90,7 +82,7 @@ def validate_batch(
                         issues.append(((column_name,), reason))
 
         issues.extend(_unique_errors(row, table, unique_sets))
-        issues.extend(_foreign_key_errors(row, table, spec, keystore, dataset, local_parent_keys))
+        issues.extend(_foreign_key_errors(row, table, spec, dataset, self_parent_values))
 
         if compiled is not None:
             parents = dataset._parents.get(table.name, {}).get(id(row), {})
@@ -284,10 +276,16 @@ def _foreign_key_errors(
     row: dict[str, Any],
     table: TableSpec,
     spec: SchemaSpec,
-    keystore: KeyStore,
     dataset: Dataset,
-    local_parent_keys: set[tuple[Any, ...]],
+    self_parent_values: dict[tuple[str, ...], set[tuple[Any, ...]]],
 ) -> list[tuple[tuple[str, ...], str]]:
+    """Comprueba cada FK contra los valores REALES de `fk.ref_columns` del padre.
+
+    `RelationshipSpec.ref_columns` puede apuntar a cualquier PK o UNIQUE del
+    padre, no necesariamente a su `primary_key` (revisión sesión E, hallazgo
+    3): comparar contra `parent.primary_key` rechazaría en falso toda FK que
+    referencie una UNIQUE distinta, o una PK compuesta listada en otro orden.
+    """
     errors: list[tuple[tuple[str, ...], str]] = []
     by_name = index_tables(spec)
     for fk in table.foreign_keys:
@@ -301,22 +299,71 @@ def _foreign_key_errors(
         if parent is None:
             errors.append((tuple(fk.columns), f"la tabla padre {fk.ref_table!r} no existe"))
             continue
-        parent_keys: set[tuple[Any, ...]]
-        if parent.name == table.name:
-            parent_keys = local_parent_keys
-        else:
-            cached_keys = dataset._key_sets.get(parent.name)
-            if cached_keys is None:
-                cached_keys = {
-                    keystore.get(parent.name, index) for index in range(keystore.count(parent.name))
-                }
-                dataset._key_sets[parent.name] = cached_keys
-            parent_keys = cached_keys
-        if values not in parent_keys:
+        ref_columns = tuple(fk.ref_columns)
+        parent_values = (
+            self_parent_values.get(ref_columns, set())
+            if parent.name == table.name
+            else _accepted_ref_values(dataset, parent.name, ref_columns)
+        )
+        if values not in parent_values:
             errors.append(
-                (tuple(fk.columns), f"FK {values!r} no existe en KeyStore[{parent.name}]")
+                (
+                    tuple(fk.columns),
+                    f"FK {values!r} no existe entre los valores aceptados de "
+                    f"{parent.name}{list(ref_columns)!r}",
+                )
             )
     return errors
+
+
+def _self_referenced_values(
+    table: TableSpec, rows: list[dict[str, Any]], dataset: Dataset
+) -> dict[tuple[str, ...], set[tuple[Any, ...]]]:
+    """Valores de cada `ref_columns` autorreferenciado vistos hasta ahora en `table`.
+
+    Nunca se cachea a largo plazo (a diferencia de `_accepted_ref_values`):
+    una autorreferencia se valida lote a lote dentro de la MISMA tabla
+    (`InsertLeveledPhase`), así que `rows` —el lote que se está validando
+    ahora, todavía sin aceptar— debe sumarse en cada llamada a lo ya aceptado
+    en `dataset.tables[table.name]`.
+    """
+    result: dict[tuple[str, ...], set[tuple[Any, ...]]] = {}
+    for fk in table.foreign_keys:
+        if fk.ref_table != table.name:
+            continue
+        ref_columns = tuple(fk.ref_columns)
+        if ref_columns in result:
+            continue
+        values = {
+            tuple(existing.get(column) for column in ref_columns)
+            for existing in dataset.tables.get(table.name, [])
+        }
+        values.update(tuple(row.get(column) for column in ref_columns) for row in rows)
+        result[ref_columns] = values
+    return result
+
+
+def _accepted_ref_values(
+    dataset: Dataset, table_name: str, ref_columns: tuple[str, ...]
+) -> set[tuple[Any, ...]]:
+    """Valores de `ref_columns` de las filas ya aceptadas de `table_name`, cacheados.
+
+    Cuando `table_name` no es la propia tabla que se valida, el orden de fases
+    garantiza que ya terminó de generarse (padre antes que hijo; dentro de una
+    `DeferredPhase`, todas las tablas de la fase están completas antes de que
+    arranque la validación de cualquiera de ellas), así que el conjunto se
+    construye una única vez por combinación (tabla, columnas referenciadas) y
+    se reutiliza para el resto de lotes del hijo.
+    """
+    key = (table_name, ref_columns)
+    cached = dataset._ref_value_sets.get(key)
+    if cached is None:
+        cached = {
+            tuple(row.get(column) for column in ref_columns)
+            for row in dataset.tables.get(table_name, [])
+        }
+        dataset._ref_value_sets[key] = cached
+    return cached
 
 
 def _rule_columns(rule: Any, table: TableSpec) -> tuple[str, ...]:

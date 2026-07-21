@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from synthdb.config.loader import load_config
-from synthdb.config.models import Config, HierarchyConfig, OutputConfig, TableConfig
+from synthdb.config.models import ColumnConfig, Config, HierarchyConfig, OutputConfig, TableConfig
 from synthdb.generation import engine
 from synthdb.generation.engine import Dataset, GenerationError, PlanError, generate_dataset
 from synthdb.ir.schema import SchemaSpec
@@ -384,3 +384,137 @@ def test_leveled_without_corruption_is_integral_and_deterministic() -> None:
     assert small.quarantine == {}
     assert len(small.tables["empleados"]) == len(small.levels["empleados"]) == 40
     assert _digest(small) == _digest(large)
+
+
+# --- FKs que referencian UNIQUE distintas de la PK (revisión sesión E, hallazgo 3) --
+
+
+def _fk_unique_target_tables() -> dict[str, TableConfig]:
+    """Config de `fk_unique_target.sql`: columnas UNIQUE por `sequence`/`template`.
+
+    Evita heurísticas por defecto que no son el objeto de este test (p. ej. una
+    columna llamada `code` puede heurísticamente resolver a texto) y una
+    plantilla `numero` sin recortar por longitud de tabla, que colisionaría.
+    """
+    return {
+        "parent": TableConfig(
+            rows=20, columns={"code": ColumnConfig(generator="sequence", params={"start": 1000})}
+        ),
+        "child": TableConfig(rows=40),
+        "grandchild": TableConfig(rows=60),
+        "parent_composite": TableConfig(
+            rows=15, columns={"a": ColumnConfig(generator="sequence", params={"start": 1})}
+        ),
+        "child_composite": TableConfig(rows=30),
+        "parent_reordered": TableConfig(
+            rows=15, columns={"a": ColumnConfig(generator="sequence", params={"start": 1})}
+        ),
+        "child_reordered": TableConfig(rows=30),
+        "pedidos_uk": TableConfig(
+            rows=200,
+            columns={"codigo": ColumnConfig(generator="sequence", params={"start": 5000})},
+        ),
+        "facturas_uk": TableConfig(
+            rows=200,
+            columns={"numero": ColumnConfig(generator="template", params={"template": "F{n}"})},
+        ),
+        "detalle_uk": TableConfig(rows=300),
+    }
+
+
+def test_fk_references_a_unique_column_that_is_not_the_primary_key() -> None:
+    # Reproducción mínima obligatoria: child.parent_code REFERENCES parent(code),
+    # una UNIQUE, no parent.id (la PK). Las filas hijas deben sobrevivir y
+    # parent_code debe existir entre parent.code.
+    dataset = generate_dataset(
+        _schema("fk_unique_target.sql"), Config(seed=0, tables=_fk_unique_target_tables())
+    )
+    assert dataset.quarantine == {}
+    codes = {row["code"] for row in dataset.tables["parent"]}
+    parent_ids = {row["id"] for row in dataset.tables["parent"]}
+    assert all(row["parent_code"] in codes for row in dataset.tables["child"])
+    # Si la validación comparase (por error) contra la PK en vez de contra
+    # `code`, esto lo delataría: los rangos de id (1..20) y code (1000..1019)
+    # de este fixture no se solapan.
+    assert not ({row["parent_code"] for row in dataset.tables["child"]} & parent_ids)
+
+
+def test_fk_composite_references_a_composite_unique_not_the_primary_key() -> None:
+    dataset = generate_dataset(
+        _schema("fk_unique_target.sql"), Config(seed=0, tables=_fk_unique_target_tables())
+    )
+    assert dataset.quarantine == {}
+    parent_pairs = {(row["a"], row["b"]) for row in dataset.tables["parent_composite"]}
+    assert all((row["x"], row["y"]) in parent_pairs for row in dataset.tables["child_composite"])
+
+
+def test_fk_ref_columns_in_different_order_than_the_composite_primary_key() -> None:
+    # child_reordered(x, y) REFERENCES parent_reordered(b, a): x debe casar con
+    # `b` del padre e y con `a` -el orden de ref_columns-, no con la PK en su
+    # propio orden declarado (a, b).
+    dataset = generate_dataset(
+        _schema("fk_unique_target.sql"), Config(seed=0, tables=_fk_unique_target_tables())
+    )
+    assert dataset.quarantine == {}
+    parents = {(row["a"], row["b"]) for row in dataset.tables["parent_reordered"]}
+    children = dataset.tables["child_reordered"]
+    assert children  # hay filas que comprobar
+    for row in children:
+        assert (row["y"], row["x"]) in parents  # (a, b) = (y, x), no (x, y)
+
+
+def test_quarantined_unique_referenced_parent_cascades_transitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # pedidos_uk <-> facturas_uk es un ciclo diferible (mecanismo de
+    # ciclos_deferrable.sql) donde facturas_uk referencia pedidos_uk.codigo
+    # (UNIQUE, no su PK). Corromper un pedido debe cuarentenar las facturas que
+    # lo referenciaban POR codigo, y la cascada debe alcanzar detalle_uk -un
+    # tercer salto fuera del ciclo, acíclico y por PK-: cierre transitivo sin
+    # ninguna FK colgante en ningún salto.
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("fecha", 1, "fecha"))
+    dataset = generate_dataset(
+        _schema("fk_unique_target.sql"), Config(seed=0, tables=_fk_unique_target_tables())
+    )
+    assert set(dataset.quarantine) == {"pedidos_uk", "facturas_uk", "detalle_uk"}
+    pedidos_codigos = {row["codigo"] for row in dataset.tables["pedidos_uk"]}
+    facturas_ids = {row["id"] for row in dataset.tables["facturas_uk"]}
+    assert 5000 not in pedidos_codigos  # codigo del pedido 1 (corrupto) desapareció
+    assert all(row["pedido_codigo"] in pedidos_codigos for row in dataset.tables["facturas_uk"])
+    assert all(row["factura_id"] in facturas_ids for row in dataset.tables["pedidos_uk"])
+    assert all(row["factura_id"] in facturas_ids for row in dataset.tables["detalle_uk"])
+
+
+# --- Dataset.updates coherente tras cuarentena (revisión sesión E, hallazgo 4) ------
+
+
+def test_updates_stay_coherent_after_referential_quarantine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # El cierre referencial de ciclos_deferrable.sql cuarentena varias filas
+    # (revisión, hallazgo 2): Dataset.updates no puede seguir apuntando a
+    # row_index de la lista sin filtrar. Comprueba las tres postcondiciones
+    # del hallazgo 4 directamente sobre el resultado público.
+    monkeypatch.setattr(engine, "complete_batch", _null_field_of_id("fecha", 1, "fecha"))
+    dataset = generate_dataset(
+        _schema("ciclos_deferrable.sql"),
+        Config(
+            seed=0,
+            tables={"pedidos": TableConfig(rows=200), "facturas": TableConfig(rows=200)},
+        ),
+    )
+    assert dataset.updates  # sigue habiendo actualizaciones que comprobar
+    for update in dataset.updates:
+        rows = dataset.tables[update.table]
+        assert 0 <= update.row_index < len(rows)  # nunca fuera de rango
+        row = rows[update.row_index]
+        # Apunta a la MISMA fila para la que se creó: sus valores actuales
+        # siguen coincidiendo con los que la actualización registró.
+        assert all(row[column] == value for column, value in update.values.items())
+    # ciclos_deferrable.sql solo tiene una FK diferida por tabla, así que cada
+    # fila recibe como mucho una actualización: los índices no deben repetirse.
+    by_table: dict[str, list[int]] = {}
+    for update in dataset.updates:
+        by_table.setdefault(update.table, []).append(update.row_index)
+    for indices in by_table.values():
+        assert len(indices) == len(set(indices))

@@ -488,6 +488,69 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- Segunda revisión de la sesión E (PR #40): cuatro hallazgos nuevos sobre la
+  revisión anterior, en `generation/numeric_bounds.py`,
+  `generation/generators/numeric.py`, `generation/engine.py` y
+  `validation/structural.py`.
+  - **`NUMERIC(p, s)` con la semántica exacta de PostgreSQL.** `quantize_to_scale`
+    (y el `_quantize` del generador `numeric_range`) redondeaban medio-a-par
+    (`ROUND_HALF_EVEN`); PostgreSQL aleja del cero los empates
+    (`ROUND_HALF_UP`): `0.385` a escala 2 pasa a ser `0.39` (no `0.38`,
+    simétrico en negativo), y `9.995` en `NUMERIC(3,2)` desborda tras
+    redondear (`10.00 > 9.99`). Además, `representable_limit`/
+    `quantize_to_scale`/`fits` dependían en silencio de la precisión ambiente
+    de `Decimal` (28 dígitos por defecto): `NUMERIC(50, 0)` truncaba su límite
+    sin avisar y `NUMERIC(100, 0)` reventaba con `InvalidOperation` al
+    cuantizar. Cada función construye ahora su propio `decimal.Context` LOCAL
+    (nunca `decimal.getcontext()`), dimensionado por los dígitos ENTEROS
+    reales del valor (`.adjusted()`, no `len(digits)`: un valor con exponente
+    grande y coeficiente corto como `2E+999` necesita igualmente 1000 dígitos)
+    más la escala destino; exacto hasta `NUMERIC(1000, 500)` sin tocar el
+    contexto global.
+  - **Rangos exclusivos y la rejilla de la escala en compilación.** La
+    comprobación de compilación (`_check_numeric_representable`) solo
+    intersecaba intervalos *reales*: `min=max=9.99, min_exclusive=true` en
+    `NUMERIC(3,2)` "solapaba" con la ventana representable y se aceptaba en
+    silencio aunque ningún valor lo cumple; `CHECK (x > 9.99)` en el mismo
+    tipo llegaba a generación y reventaba con `ValueError` en vez de
+    rechazarse en compilación. Nueva `numeric_bounds.has_quantized_value
+    (precision, scale, low, high, min_exclusive, max_exclusive)`: comprueba
+    que existe al menos un múltiplo de la escala dentro del rango, respetando
+    sus exclusividades y las del límite del tipo (que nunca excluye su propio
+    extremo salvo que el usuario lo pida). Ningún rango imposible llega ya al
+    bucle de generación ni acaba como cuarentena completa.
+  - **Las FK que referencian una UNIQUE distinta de la PK validan
+    correctamente.** `validate_batch`/`_foreign_key_errors` y la postcondición
+    `_enforce_referential_integrity` comparaban la clave del hijo contra
+    `parent.primary_key`, asumiendo que toda FK referencia la PK del padre.
+    `RelationshipSpec.ref_columns` puede apuntar a cualquier UNIQUE (o a la PK
+    compuesta en otro orden): con esa asunción, una FK así rechazaba en falso
+    casi todas sus filas, y el cierre nunca detectaba una referencia
+    realmente colgante hacia esa UNIQUE. Ambas capas comparan ahora contra los
+    valores reales de `fk.ref_columns`, en su orden exacto; `KeyStore` sigue
+    indexando por PK para la SELECCIÓN de FK (sin cambios), pero la
+    validación usa índices propios por `(tabla, columnas referenciadas)`
+    (`Dataset._ref_value_sets`, con caché perezosa; `_accepted_ref_value_sets`
+    en el cierre). `validate_batch` deja de necesitar `KeyStore`.
+  - **`Dataset.updates` sigue siendo válido tras la cuarentena del cierre
+    referencial.** `_fill_missing_foreign_keys` registra `row_index` como la
+    posición en `dataset.tables[tabla]` EN ESE MOMENTO; si
+    `_enforce_referential_integrity` cuarentena filas después, esas
+    posiciones quedaban desplazadas o pasaban a apuntar a otra fila. Nuevo
+    `Dataset._update_origins` (número de fila original, estable, paralelo a
+    `updates`) y `_resync_updates`: al terminar el cierre, descarta las
+    actualizaciones de filas cuarentenadas y recalcula el `row_index` de las
+    supervivientes contra su posición final.
+  - Nuevo fixture `tests/schemas/fk_unique_target.sql` (fixture 12): FK simple
+    y compuesta hacia una UNIQUE, `ref_columns` en orden distinto al de la PK,
+    y un ciclo diferible donde una dirección referencia una UNIQUE, para
+    probar la cuarentena de un padre referenciado por UNIQUE con cierre
+    transitivo hasta una tercera tabla fuera del ciclo. Tests nuevos en
+    `test_numeric_precision.py` (redondeo, precisión grande, rejilla y
+    exclusividad) y `test_engine.py` (las reproducciones mínimas del hallazgo
+    3 y la regresión de coherencia de `updates` sobre `ciclos_deferrable.sql`,
+    hallazgo 4).
+
 - Revisión de la sesión E (T2.11-T2.13): los dos hallazgos publicados en el PR.
   - **`NUMERIC(precision, scale)` se respeta de punta a punta.** La IR conservaba
     `precision`/`scale` pero ni la generación ni `validation.structural` los

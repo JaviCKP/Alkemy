@@ -8,7 +8,7 @@ records in memory so later emitters can choose their physical representation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from random import Random
 from typing import Any, TypeAlias
 
@@ -24,7 +24,11 @@ from synthdb.generation.fk import (
 )
 from synthdb.generation.generators import Generator, resolve
 from synthdb.generation.keystore import KeyStore
-from synthdb.generation.numeric_bounds import as_decimal, effective_scale, representable_limit
+from synthdb.generation.numeric_bounds import (
+    effective_scale,
+    has_quantized_value,
+    representable_limit,
+)
 from synthdb.generation.seeding import rng_for_row, seed_for_table
 from synthdb.graph.dependency import analyze_structure, index_tables
 from synthdb.graph.strategies import resolve_cycles
@@ -111,6 +115,7 @@ class Dataset:
     tables: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     quarantine: dict[str, list[ValidationIssue]] = field(default_factory=dict)
     updates: list[DatasetUpdate] = field(default_factory=list)
+    _update_origins: list[int] = field(default_factory=list, repr=False)
     levels: dict[str, list[int]] = field(default_factory=dict)
     phases: list[Phase] = field(default_factory=list)
     table_plans: TablePlans | None = None
@@ -126,6 +131,9 @@ class Dataset:
         default_factory=dict, repr=False
     )
     _key_sets: dict[str, set[tuple[Any, ...]]] = field(default_factory=dict, repr=False)
+    _ref_value_sets: dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]] = field(
+        default_factory=dict, repr=False
+    )
     _config: Config | None = field(default=None, repr=False)
 
     def __getitem__(self, table: str) -> list[dict[str, Any]]:
@@ -207,9 +215,7 @@ def generate_dataset(spec: SchemaSpec, config: Config) -> Dataset:
             for table_name in phase.tables:
                 dataset._validation_unique.pop(table_name, None)
                 rows = dataset.tables[table_name]
-                ok, bad = validate_batch(
-                    rows, compiled[table_name].plan, interpreted, store, dataset
-                )
+                ok, bad = validate_batch(rows, compiled[table_name].plan, interpreted, dataset)
                 if bad:
                     if config.output.on_error == "abort":
                         _, columns, reason = bad[0]
@@ -336,33 +342,47 @@ def _check_numeric_representable(
 ) -> None:
     """Rechaza en compilación un rango que ningún valor de `NUMERIC(p, s)` cumple.
 
-    Un `NUMERIC(p, s)` solo almacena magnitudes hasta ``(10**p - 1)/10**s``. Si el
-    rango configurado (o el derivado de un CHECK) queda por completo fuera de esa
-    ventana, ninguna fila sería válida: es una contradicción de plan que se rechaza
-    con un error accionable, no una fila que cuarentenar (CLAUDE.md).
+    Un `NUMERIC(p, s)` solo almacena magnitudes hasta ``(10**p - 1)/10**s``, en
+    múltiplos exactos de su escala. No basta con comprobar que el rango pedido
+    (o el derivado de un CHECK) se solapa con esa ventana como intervalos
+    reales: la rejilla de la escala o una exclusividad (`min_exclusive`,
+    `max_exclusive`) pueden dejarlo sin ningún valor cuantizable aunque el
+    solape real sea no vacío (`has_quantized_value`). Si ningún valor
+    representable lo cumple, ninguna fila sería válida: es una contradicción de
+    plan que se rechaza con un error accionable, no una fila que cuarentenar
+    (CLAUDE.md).
     """
     if spec is None or spec.type != "numeric_range":
         return
     type_spec = column.type
     if type_spec.kind != "numeric" or type_spec.precision is None:
         return
-    limit = representable_limit(type_spec.precision, type_spec.scale)
     raw_min = spec.params.get("min")
     raw_max = spec.params.get("max")
-    low = as_decimal(raw_min) if raw_min is not None else -limit
-    high = as_decimal(raw_max) if raw_max is not None else limit
-    if max(low, -limit) <= min(high, limit):
+    min_exclusive = bool(spec.params.get("min_exclusive", False))
+    max_exclusive = bool(spec.params.get("max_exclusive", False))
+    if has_quantized_value(
+        type_spec.precision,
+        type_spec.scale,
+        low=raw_min,
+        high=raw_max,
+        min_exclusive=min_exclusive,
+        max_exclusive=max_exclusive,
+    ):
         return
+    limit = representable_limit(type_spec.precision, type_spec.scale)
     scale = effective_scale(type_spec.scale)
     requested = (
         f"[{raw_min if raw_min is not None else 'sin mínimo'}, "
         f"{raw_max if raw_max is not None else 'sin máximo'}]"
+        f" (min_exclusive={min_exclusive}, max_exclusive={max_exclusive})"
     )
     raise PlanError(
         f"tabla {table_name}, columna {column.name}: el rango {requested} del generador "
         f"'numeric_range' no contiene ningún valor representable en "
-        f"NUMERIC({type_spec.precision}, {scale}) (máximo representable ±{limit}). Ajusta "
-        f"el rango en el YAML o el tipo de la columna."
+        f"NUMERIC({type_spec.precision}, {scale}) una vez aplicadas la rejilla de la escala "
+        f"y las exclusividades (máximo representable ±{limit}). Ajusta el rango, sus "
+        f"exclusividades o el tipo de la columna."
     )
 
 
@@ -774,7 +794,7 @@ def _accept_batch(
     if defer_validation:
         ok, bad = batch, []
     else:
-        ok, bad = validate_batch(batch, compiled.plan, _CURRENT_SPEC, store, dataset)
+        ok, bad = validate_batch(batch, compiled.plan, _CURRENT_SPEC, dataset)
     if bad and config.output.on_error == "abort":
         _, columns, reason = bad[0]
         raise GenerationError(
@@ -922,7 +942,8 @@ def _fill_missing_foreign_keys(
                     f"tabla {table_name}: no hay fila padre compatible para completar "
                     f"la FK ({', '.join(fk.columns)})."
                 )
-            rng = rng_for_row(table_seed, dataset._row_numbers[table_name][id(row)])
+            row_number = dataset._row_numbers[table_name][id(row)]
+            rng = rng_for_row(table_seed, row_number)
             parent = candidates[rng.randrange(len(candidates))]
             changed: dict[str, Any] = {}
             for local, ref in zip(fk.columns, fk.ref_columns, strict=True):
@@ -932,6 +953,7 @@ def _fill_missing_foreign_keys(
                 dataset._parents[table_name][id(row)][local] = parent
             if changed:
                 dataset.updates.append(DatasetUpdate(table_name, position, changed))
+                dataset._update_origins.append(row_number)
 
 
 def _enforce_referential_integrity(spec: SchemaSpec, dataset: Dataset, store: KeyStore) -> None:
@@ -946,6 +968,11 @@ def _enforce_referential_integrity(spec: SchemaSpec, dataset: Dataset, store: Ke
     dependientes caen también, transitivamente. No se inventan ni reasignan valores
     (la reparación es H4): aquí solo se aísla.
 
+    La comparación usa los valores reales de ``RelationshipSpec.ref_columns`` de
+    cada FK, nunca `parent.primary_key`: una FK puede referenciar una UNIQUE
+    distinta de la PK, o listar la PK compuesta en otro orden (revisión sesión
+    E, hallazgo 3).
+
     ``Dataset.levels`` se mantiene alineado 1:1 con las filas aceptadas y, al
     terminar, el ``KeyStore`` y ``_key_sets`` reflejan únicamente filas aceptadas.
     Para un dataset ya íntegro (el caso normal) es un no-op: cero cuarentena nueva.
@@ -954,7 +981,7 @@ def _enforce_referential_integrity(spec: SchemaSpec, dataset: Dataset, store: Ke
     changed = True
     while changed:
         changed = False
-        accepted = _accepted_key_sets(spec, dataset)
+        accepted = _accepted_ref_value_sets(spec, dataset)
         for table in spec.tables:
             rows = dataset.tables.get(table.name)
             if not rows or not table.foreign_keys:
@@ -978,32 +1005,42 @@ def _enforce_referential_integrity(spec: SchemaSpec, dataset: Dataset, store: Ke
                 _drop_unkept_rows(dataset, table.name, keep)
                 dataset.quarantine.setdefault(table.name, []).extend(bad)
     _resync_key_stores(spec, dataset, store)
+    _resync_updates(dataset)
 
 
-def _accepted_key_sets(spec: SchemaSpec, dataset: Dataset) -> dict[str, set[tuple[Any, ...]]]:
-    """Claves primarias de las filas ACTUALMENTE aceptadas, por tabla."""
-    result: dict[str, set[tuple[Any, ...]]] = {}
-    for table in spec.tables:
-        if not table.primary_key:
-            continue
-        result[table.name] = {
-            tuple(row.get(column) for column in table.primary_key)
-            for row in dataset.tables.get(table.name, [])
+def _accepted_ref_value_sets(
+    spec: SchemaSpec, dataset: Dataset
+) -> dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]]:
+    """Valores de las filas ACTUALMENTE aceptadas, por (tabla padre, columnas referenciadas).
+
+    Se computa una entrada por cada combinación `(fk.ref_table, fk.ref_columns)`
+    que aparece en alguna FK del esquema —incluidas las autorreferencias—, nunca
+    asumiendo que `ref_columns` es `table.primary_key` (hallazgo 3).
+    """
+    targets = {
+        (fk.ref_table, tuple(fk.ref_columns)) for table in spec.tables for fk in table.foreign_keys
+    }
+    return {
+        (table_name, ref_columns): {
+            tuple(row.get(column) for column in ref_columns)
+            for row in dataset.tables.get(table_name, [])
         }
-    return result
+        for table_name, ref_columns in targets
+    }
 
 
 def _dangling_fk_columns(
     row: dict[str, Any],
     table: TableSpec,
     by_name: dict[str, TableSpec],
-    accepted: dict[str, set[tuple[Any, ...]]],
+    accepted: dict[tuple[str, tuple[str, ...]], set[tuple[Any, ...]]],
 ) -> tuple[str, ...]:
     """Columnas de las FK no nulas de `row` cuyo padre no figura entre los aceptados.
 
     Refleja la misma semántica que ``validation.structural._foreign_key_errors``:
-    una FK con algún NULL se salta (su nulabilidad ya se validó) y la clave del hijo
-    se compara contra las PK de las filas padre aceptadas.
+    una FK con algún NULL se salta (su nulabilidad ya se validó) y la clave del
+    hijo se compara contra los valores de ``fk.ref_columns`` de las filas padre
+    aceptadas, en su orden exacto (hallazgo 3).
     """
     dangling: list[str] = []
     for fk in table.foreign_keys:
@@ -1013,10 +1050,10 @@ def _dangling_fk_columns(
         parent = by_name.get(fk.ref_table)
         if parent is None:
             continue
-        parent_keys = accepted.get(parent.name)
-        if parent_keys is None:
+        parent_values = accepted.get((parent.name, tuple(fk.ref_columns)))
+        if parent_values is None:
             continue
-        if values not in parent_keys:
+        if values not in parent_values:
             dangling.extend(fk.columns)
     return tuple(dict.fromkeys(dangling))
 
@@ -1041,6 +1078,40 @@ def _resync_key_stores(spec: SchemaSpec, dataset: Dataset, store: KeyStore) -> N
         ]
         dataset._key_sets[table.name] = set(keys)
         store.replace(table.name, keys)
+
+
+def _resync_updates(dataset: Dataset) -> None:
+    """Realinea `Dataset.updates` con las posiciones tras el cierre referencial.
+
+    `_fill_missing_foreign_keys` registra `row_index` como la posición de la
+    fila en `dataset.tables[table]` EN ESE MOMENTO. Si `_enforce_referential_integrity`
+    cuarentena filas después, esas posiciones quedan desplazadas o pasan a
+    apuntar a otra fila (hallazgo 4). Se descartan las actualizaciones cuya
+    fila acabó en cuarentena y se recalcula `row_index` de las supervivientes
+    contra `dataset._row_numbers` (el número de fila original, estable, que
+    nunca se reasigna aunque la lista se filtre y desplace).
+    """
+    kept_updates: list[DatasetUpdate] = []
+    kept_origins: list[int] = []
+    position_by_row_number: dict[str, dict[int, int]] = {}
+    for update, row_number in zip(dataset.updates, dataset._update_origins, strict=True):
+        by_number = position_by_row_number.get(update.table)
+        if by_number is None:
+            row_numbers = dataset._row_numbers.get(update.table, {})
+            by_number = {
+                row_numbers[id(row)]: index
+                for index, row in enumerate(dataset.tables.get(update.table, []))
+            }
+            position_by_row_number[update.table] = by_number
+        new_index = by_number.get(row_number)
+        if new_index is None:
+            continue  # la fila de esta actualización quedó en cuarentena
+        kept_updates.append(
+            update if new_index == update.row_index else replace(update, row_index=new_index)
+        )
+        kept_origins.append(row_number)
+    dataset.updates = kept_updates
+    dataset._update_origins = kept_origins
 
 
 def _install_run_context(spec: SchemaSpec, dataset: Dataset) -> None:

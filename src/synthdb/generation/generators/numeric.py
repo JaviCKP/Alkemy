@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import bisect
 import math
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -151,12 +151,14 @@ class NumericRangeGenerator:
         """Redondea `x` al múltiplo de `step` con aritmética exacta de `Decimal`.
 
         Usar `Decimal` (no ``round(x / step) * step`` en coma flotante) evita el
-        ruido binario que dejaría 0.37 como 0.37000000000000005 (CLAUDE.md).
+        ruido binario que dejaría 0.37 como 0.37000000000000005 (CLAUDE.md). Los
+        empates se alejan de cero, como PostgreSQL al insertar en `NUMERIC`
+        (`numeric_bounds.quantize_to_scale` usa el mismo criterio).
         """
         if step is None:
             return x
         s = Decimal(str(step))
-        return float((Decimal(str(x)) / s).to_integral_value(rounding=ROUND_HALF_EVEN) * s)
+        return float((Decimal(str(x)) / s).to_integral_value(rounding=ROUND_HALF_UP) * s)
 
     def _apply_float_exclusivity(self, x: float, lo: float, hi: float, step: float | None) -> float:
         effective = step if step else max((hi - lo) * 1e-9, 1e-9)
