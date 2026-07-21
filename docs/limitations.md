@@ -216,6 +216,13 @@ los emite a CSV, JSON y `seed.sql` (PostgreSQL), sin tocar ninguna base de datos
 (la inserción transaccional es el Hito 4). Misma semilla + mismo esquema + misma
 configuración ⇒ mismos bytes ([ADR-006](adr/006-semillas-jerarquicas.md)).
 
+Los emisores CSV/JSON conservan los nombres ASCII minúsculos normales y codifican
+los demás componentes como `~` más base32 minúscula sin padding de sus bytes UTF-8.
+La codificación es determinista, segura frente a traversal e inyectiva bajo
+comparación insensible a mayúsculas; su cota cubre holgadamente los identificadores
+PostgreSQL de 63 bytes por componente y los nombres reservados de Windows no se
+resuelven anteponiendo un prefijo que pueda colisionar con una tabla real.
+
 ### Qué genera el MVP
 
 - Un generador por columna según la cadena de prioridad usuario > IR > heurística

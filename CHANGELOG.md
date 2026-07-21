@@ -18,8 +18,10 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     como JSON en la celda o lista nativa, y terminador `\n` fijo (reproducibilidad
     multiplataforma). Los nombres normales en minúsculas conservan `<tabla>.csv`
     / `.json`; mayúsculas, Unicode, percent y caracteres no seguros se codifican
-    de forma inyectiva incluso al plegar mayúsculas, y los reservados de Windows
-    se escapan sin un prefijo que pueda colisionar con un nombre real. La lista
+    como `~` más base32 minúscula sin padding de los bytes UTF-8 completos. La
+    codificación es inyectiva incluso al plegar mayúsculas, queda acotada para
+    los identificadores PostgreSQL de 63 bytes y los reservados de Windows se
+    codifican sin un prefijo que pueda colisionar con un nombre real. La lista
     completa de nombres se valida antes de escribir; una colisión o ruta fuera
     de `--out` es `EmitPathError` y `generate` termina con código 4. `sql_file.py`
     emite un `seed.sql` de PostgreSQL dirigido por

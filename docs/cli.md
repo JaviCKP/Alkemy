@@ -131,6 +131,13 @@ synthdb generate RUTA.sql -c config.yaml -o DIR [--format csv|json] [--dry-run]
 Genera los datos y escribe **un archivo por tabla** en `DIR` (creado si no
 existe). `--format csv` (por defecto) o `--format json`.
 
+Los nombres de tabla ASCII en minúsculas se conservan (`clientes.csv`); cualquier
+otro componente (mayúsculas, Unicode, percent, separadores o control) se codifica
+como `~` más base32 minúscula sin padding de sus bytes UTF-8. El formato es
+determinista, seguro frente a traversal, inyectivo al plegar mayúsculas y acotado
+para los identificadores PostgreSQL máximos; los nombres de dispositivo de Windows
+también se codifican completos, sin anteponer un prefijo ambiguo.
+
 ```text
 Escritos 4 archivo(s) CSV en out:
   out\clientes.csv

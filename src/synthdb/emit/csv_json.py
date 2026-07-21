@@ -27,6 +27,7 @@ Representación de valores:
 
 from __future__ import annotations
 
+import base64
 import csv
 import datetime
 import json
@@ -49,17 +50,17 @@ class EmitPathError(ValueError):
 
 
 _SAFE_FILENAME_BYTES = frozenset(b"abcdefghijklmnopqrstuvwxyz0123456789_-")
-"""Bytes que un componente de nombre de archivo conserva tal cual: **solo
-minúsculas** ASCII, dígitos, `_` y `-` (revisión PR #42, hallazgos 2 y R3-1).
-Todo lo demás -incluidas las MAYÚSCULAS A-Z, separadores de ruta (`/`, `\\`),
-`.`, `..`, espacios, control y cualquier byte no-ASCII- se percent-encodea con
-`%xx` en hex **minúsculo**. Que las mayúsculas se codifiquen y la salida sea
-enteramente minúscula es lo que hace la codificación inyectiva **también bajo
-comparación insensible a mayúsculas** (NTFS/APFS): `foo`→`foo`, `Foo`→`%46oo`,
-`FOO`→`%46%4f%4f` son distintos incluso al plegar mayúsculas. El propio `%` se
-codifica (`%25`), así que el esquema es autodelimitado (todo `%` inicia un
-triplete `%xx`) y por tanto inyectivo: nombres distintos ⇒ codificaciones
-distintas, y ninguno puede introducir un separador de ruta ni un `..`."""
+"""Bytes que un componente de nombre de archivo conserva literalmente: solo
+minúsculas ASCII, dígitos, `_` y `-`. El marcador `~` queda fuera de este
+conjunto; cualquier componente no conservable se representa como `~` seguido
+de los bytes UTF-8 completos codificados en base32 minúscula sin padding.
+La base32 es inyectiva, no introduce separadores ni `..`, y mantiene la salida
+estable bajo comparación insensible a mayúsculas. PostgreSQL limita cada
+identificador a 63 bytes: incluso el peor componente ocupa como máximo 102
+caracteres (`~` + 101 de base32), por lo que schema+tabla+extensión cabe
+holgadamente en un nombre de archivo de 255 bytes."""
+
+_FILENAME_ENCODED_MARKER = "~"
 
 _WINDOWS_RESERVED_STEMS = frozenset(
     {"con", "prn", "aux", "nul"}
@@ -71,36 +72,29 @@ nombre de archivo con cualquier extensión, y (para nombres con varios puntos)
 como el primer componente antes del primer punto."""
 
 
-def _encode_name_component(name: str) -> str:
-    """Codifica `name` a un componente de archivo seguro, inyectivo y en minúsculas.
+def _is_literal_filename_component(name: str) -> bool:
+    """Devuelve si `name` puede conservarse sin perder seguridad ni inyectividad."""
+    try:
+        raw = name.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return bool(raw) and all(byte in _SAFE_FILENAME_BYTES for byte in raw)
 
-    Percent-encoding sobre los bytes UTF-8 de `name`: todo byte fuera de
-    `_SAFE_FILENAME_BYTES` (incluidas las mayúsculas) se sustituye por `%xx`
-    con hex minúsculo. Determinista, sin dependencia del SO ni del locale, y
-    con salida enteramente en minúsculas para ser inyectiva bajo comparación
-    insensible a mayúsculas.
+
+def _encode_name_component(name: str, *, force: bool = False) -> str:
+    """Codifica un componente completo como nombre seguro, acotado e inyectivo.
+
+    Los nombres ASCII minúsculos seguros se conservan para mantener los
+    nombres normales (`foo` → `foo`). El resto, o los reservados de Windows,
+    se codifica como `~` más base32 minúscula sin padding de sus bytes UTF-8
+    completos. El marcador no aparece en los nombres conservados, así que una
+    forma codificada no puede colisionar con una forma literal al plegar
+    mayúsculas.
     """
-    parts = []
-    for byte in name.encode("utf-8"):
-        if byte in _SAFE_FILENAME_BYTES:
-            parts.append(chr(byte))
-        else:
-            parts.append(f"%{byte:02x}")
-    return "".join(parts)
-
-
-def _escape_first_char(component: str) -> str:
-    """Percent-encodea el primer carácter de un componente (para nombres reservados).
-
-    Solo se aplica a un componente que YA es un nombre de dispositivo
-    reservado de Windows (`con`, `com1`...): esos son ASCII y empiezan por una
-    letra minúscula segura, así que codificar su primer byte (`con`→`%63on`)
-    produce una forma que **ningún nombre normal genera** -una letra segura
-    jamás se percent-encodea-, con lo que no puede colisionar con una tabla
-    real llamada, p. ej., `_con`. Prefijar con `_` sí colisionaría (`_con` es
-    un nombre de tabla válido); por eso NO se usa un prefijo.
-    """
-    return f"%{ord(component[0]):02x}{component[1:]}"
+    if not force and _is_literal_filename_component(name):
+        return name
+    encoded = base64.b32encode(name.encode("utf-8")).decode("ascii").rstrip("=")
+    return _FILENAME_ENCODED_MARKER + encoded.lower()
 
 
 def _table_identity(table: TableSpec) -> str:
@@ -114,21 +108,22 @@ def _safe_table_filename(table: TableSpec, ext: str) -> str:
     Una tabla sin `schema_` y con un nombre ya en minúsculas seguro produce
     exactamente `<tabla>.<ext>` (caso normal preservado). Cualquier otro
     carácter -incluidas mayúsculas, separadores de ruta, `..`, control,
-    espacios y Unicode- se percent-encodea (`_encode_name_component`), con
-    salida en minúsculas para no colisionar en Windows/macOS. Una tabla
-    cualificada antepone el esquema codificado y un `.` separador; como el
-    `.` que pudiera aparecer en un nombre se codifica a `%2e`, el único `.`
-    literal del *stem* es ese separador, lo que distingue sin ambigüedad
-    `esquema.tabla` de una tabla llamada `esquema.tabla`. Si el **primer
-    componente** (esquema si lo hay, si no la tabla) coincide con un nombre de
-    dispositivo reservado de Windows, se escapa su primer carácter
-    (`_escape_first_char`) en vez de prefijarlo.
+    espacios y Unicode- se codifica como `~` más base32 minúscula sin padding
+    de sus bytes UTF-8 completos. Una tabla cualificada antepone el esquema
+    codificado y un `.` separador; como la codificación no contiene puntos, el
+    único `.` literal del *stem* es ese separador, lo que distingue sin
+    ambigüedad `esquema.tabla` de una tabla llamada `esquema.tabla`. Si el
+    **primer componente** (esquema si lo hay, si no la tabla) coincide con un
+    dispositivo reservado de Windows, también se codifica completo: no se
+    antepone un prefijo que pueda colisionar con un nombre real como `_con`.
     """
-    components = [_encode_name_component(table.name)]
+    raw_components = [table.name]
     if table.schema_:
-        components = [_encode_name_component(table.schema_), _encode_name_component(table.name)]
-    if components[0].casefold() in _WINDOWS_RESERVED_STEMS:
-        components[0] = _escape_first_char(components[0])
+        raw_components = [table.schema_, table.name]
+    components = [
+        _encode_name_component(component, force=component.casefold() in _WINDOWS_RESERVED_STEMS)
+        for component in raw_components
+    ]
     stem = ".".join(components)
     return f"{stem}.{ext}"
 

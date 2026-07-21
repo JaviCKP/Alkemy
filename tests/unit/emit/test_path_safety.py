@@ -12,6 +12,7 @@ colisiones case-insensitive antes de escribir el primer archivo
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,35 @@ def test_normal_lowercase_table_name_is_unchanged() -> None:
     assert _fname("pedidos_uk") == "pedidos_uk.csv"
 
 
+@pytest.mark.parametrize("ext", ["csv", "json"])
+def test_maximum_postgres_identifier_names_write_physical_files(tmp_path: Path, ext: str) -> None:
+    # Cada identificador ocupa 62 bytes UTF-8: es válido para PostgreSQL y
+    # fuerza el límite de longitud sin depender de nombres ASCII cortos.
+    schema = "ñ" * 31
+    table_name = "é" * 31
+    assert len(schema.encode("utf-8")) == 62
+    assert len(table_name.encode("utf-8")) == 62
+
+    out_dir = tmp_path / "out"
+    spec = SchemaSpec(dialect="postgres", tables=[_table(table_name, schema)])
+    dataset = Dataset(
+        tables={table_name: [{"id": 31}]},
+        phases=[InsertPhase(tables=[table_name])],
+    )
+
+    paths = generate_files(spec, dataset, out_dir, ext)
+
+    assert len(paths) == 1
+    path = paths[0]
+    assert path.exists()
+    assert len(path.name.encode("utf-8")) <= 255
+    assert len(list(out_dir.glob(f"*.{ext}"))) == 1
+    if ext == "csv":
+        assert "31" in path.read_text(encoding="utf-8")
+    else:
+        assert json.loads(path.read_text(encoding="utf-8")) == [{"id": 31}]
+
+
 @pytest.mark.parametrize(
     "malicious_name",
     ["../escaped", "..\\escaped", "../../etc/passwd", "a/b", "a" + chr(92) + "b", "..", "."],
@@ -62,11 +92,12 @@ def test_path_traversal_names_are_encoded_away(malicious_name: str) -> None:
     assert ".." not in filename.removesuffix(".csv")
 
 
-def test_control_characters_and_percent_are_encoded() -> None:
+def test_control_characters_unicode_and_percent_are_base32_encoded() -> None:
     filename = _fname("a\x00b\tc%d")
     assert "\x00" not in filename
     assert "\t" not in filename
-    assert "%25" in filename  # el propio '%' se codifica: esquema inyectivo
+    assert filename.startswith("~")
+    assert "%" not in filename
 
 
 def test_encoding_output_is_entirely_lowercase() -> None:
@@ -124,8 +155,8 @@ def test_schema_qualified_does_not_collide_with_same_named_table() -> None:
 @pytest.mark.parametrize("reserved", ["con", "prn", "aux", "nul", "com1", "lpt9"])
 def test_reserved_device_name_is_not_a_prefixed_real_name(reserved: str) -> None:
     # Un nombre reservado en minúsculas NO se resuelve como `_con` (que
-    # colisionaría con una tabla real `_con`), sino escapando su primer
-    # carácter, forma que ningún nombre normal produce.
+    # colisionaría con una tabla real `_con`), sino codificando el componente
+    # completo con el marcador reservado para formas no literales.
     reserved_file = _fname(reserved)
     stem = reserved_file.removesuffix(".csv")
     # El primer componente (antes del primer punto) ya no es un dispositivo.
@@ -149,7 +180,7 @@ def test_uppercase_quoted_reserved_name_is_distinct_from_lowercase_and_underscor
 
 def test_reserved_schema_first_component_is_escaped() -> None:
     # schema `con` cualificando `foo`: en Windows `con.foo.csv` trataría `con`
-    # como dispositivo. El primer componente se escapa.
+    # como dispositivo. El primer componente se codifica completo.
     stem = _fname("foo", schema="con").removesuffix(".csv")
     assert stem.split(".")[0].casefold() not in {"con", "prn", "aux", "nul"}
 

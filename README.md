@@ -26,7 +26,11 @@ uv run synthdb export   tests/schemas/inmobiliaria.sql -c config.yaml --format s
 - **`plan`** muestra el plan de generación por columna (generador, fuente,
   confianza, reglas, avisos) y las fases.
 - **`generate`** escribe un CSV o JSON por tabla, respetando el orden de columnas,
-  con `NULL` como campo vacío y arrays serializados.
+  con `NULL` como campo vacío y arrays serializados. Conserva los nombres ASCII
+  minúsculos normales (`<tabla>.csv`/`.json`); los demás componentes usan `~` más
+  base32 minúscula sin padding de sus bytes UTF-8, una codificación determinista
+  y acotada que también evita colisiones en sistemas de archivos insensibles a
+  mayúsculas y nombres de dispositivo de Windows.
 - **`export`** escribe un `seed.sql` cargable en PostgreSQL con `psql`: `INSERT`
   multi-fila por fases, `UPDATE` para cerrar ciclos y literales escalares
   construidos por sqlglot, que escapa el literal SQL exterior. Los arrays se
