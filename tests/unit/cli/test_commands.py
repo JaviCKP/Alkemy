@@ -473,3 +473,107 @@ def test_export_writes_seed_sql_with_fixed_newline_even_on_windows(tmp_path: Pat
     assert b"\r\n" not in raw
     assert raw.endswith(b"\n")
     assert raw.count(b"\n") > 1
+
+
+# --- Seguridad (revisión PR #42, R3-1): colisión de nombres → CLI sin traceback ---
+
+
+def test_generate_maps_emit_path_error_to_exit_four_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Una colisión/contención de nombres de archivo (EmitPathError) no puede
+    # escaparse como ValueError con traceback: la CLI la mapea a código 4 con
+    # mensaje accionable. Se fuerza el error en la frontera (generate_files),
+    # ya que con la codificación nueva ningún esquema válido lo produce.
+    from synthdb.emit import EmitPathError
+
+    def boom(*_args: object, **_kwargs: object) -> list[Path]:
+        raise EmitPathError("las tablas 'a' y 'A' producirían el mismo archivo de salida (…).")
+
+    monkeypatch.setattr("synthdb.cli.generate_files", boom)
+    result = _invoke(
+        "generate",
+        _fixture("ciclos_nullable"),
+        "-c",
+        _config(tmp_path, _CICLOS_CFG),
+        "-o",
+        str(tmp_path / "out"),
+    )
+    assert result.exit_code == 4, result.output
+    assert "Traceback" not in result.output
+    assert "mismo archivo de salida" in result.output
+
+
+# --- Seguridad (revisión PR #42, R3-2): la cuarentena se informa SIEMPRE -----
+
+
+_SERIAL_GAP_SCHEMA = (
+    "CREATE TABLE parent (id SERIAL PRIMARY KEY, value INT NOT NULL);"
+    "CREATE TABLE child (id SERIAL PRIMARY KEY, parent_id INT NOT NULL REFERENCES parent(id));"
+)
+_SERIAL_GAP_CFG = (
+    "seed: 7\ntables:\n  parent: {rows: 3}\n"
+    "  child: {rows: 6, fk: {parent_id: {strategy: uniform}}}\n"
+)
+
+
+def _quarantine_parent_row_two(batch: list[dict[str, Any]]) -> None:
+    for row in batch:
+        if "value" in row and row.get("id") == 2:
+            row["value"] = None  # NOT NULL a NULL ⇒ cuarentena de la fila 2
+
+
+def test_export_serial_gap_reports_quarantine_before_exiting_four(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ExportIntegrityError (hueco SERIAL) aborta export con código 4, pero la
+    # cuarentena que lo causó debe informarse igualmente (R3-2).
+    schema_path = tmp_path / "schema.sql"
+    schema_path.write_text(_SERIAL_GAP_SCHEMA, encoding="utf-8")
+    monkeypatch.setattr(engine, "complete_batch", _quarantine_parent_row_two)
+    seed = tmp_path / "seed.sql"
+    result = _invoke(
+        "export",
+        str(schema_path),
+        "-c",
+        _config(tmp_path, _SERIAL_GAP_CFG),
+        "--format",
+        "sql",
+        "-o",
+        str(seed),
+    )
+    assert result.exit_code == 4, result.output
+    assert "Traceback" not in result.output
+    assert not seed.exists()
+    # La cuarentena se informa exactamente una vez, con tabla y primer motivo.
+    assert result.output.count("Cuarentena:") == 1
+    assert "parent" in result.output
+    assert "Primer motivo:" in result.output
+
+
+def test_generate_io_error_still_reports_quarantine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Un fallo de E/S al escribir (--out es un archivo existente) no debe
+    # tragarse el informe de cuarentena (R3-2): exit 3 + cuarentena informada.
+    monkeypatch.setattr(engine, "complete_batch", _quarantine_pedidos_row_one)
+    blocker = tmp_path / "blocker"
+    blocker.write_text("preexistente", encoding="utf-8")
+    result = _invoke(
+        "generate",
+        _fixture("ciclos_nullable"),
+        "-c",
+        _config(tmp_path, _CICLOS_CFG),
+        "-o",
+        str(blocker),
+    )
+    assert result.exit_code == 3, result.output
+    assert "Traceback" not in result.output
+    assert result.output.count("Cuarentena:") == 1
+    assert "pedidos" in result.output
+
+
+def _quarantine_pedidos_row_one(batch: list[dict[str, Any]]) -> None:
+    for row in batch:
+        if "fecha" in row and row.get("id") == 1:
+            row["fecha"] = None

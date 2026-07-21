@@ -247,14 +247,19 @@ configuración ⇒ mismos bytes ([ADR-006](adr/006-semillas-jerarquicas.md)).
   rango imposible y `generate`/`export` terminan con un error accionable
   (código 4), no con una fila inválida. Solución: fija un `datetime_range` con
   `min`/`max` explícitos en la columna, o ajusta la regla.
-- **Continuidad de `SERIAL` en el `seed.sql`.** El emisor SQL omite las columnas
-  autoincrementales del `INSERT` (las asigna la base de datos). Para un dataset
-  **sin cuarentena**, la secuencia de PostgreSQL reproduce exactamente los ids que
-  usó el motor (1, 2, 3…) y las FKs cuadran. Si hay filas en cuarentena en una
-  tabla con `SERIAL`, sus ids dejan huecos y los de la secuencia podrían no
-  coincidir con las FKs del `seed.sql`: para esos casos, el emisor de base de
-  datos del Hito 4 traduce los ids explícitamente. Los CSV/JSON no tienen este
-  matiz (llevan el id generado en la propia fila).
+- **Continuidad de `SERIAL` en el `seed.sql` (rechazo, no salida silenciosa).** El
+  emisor SQL omite las columnas autoincrementales del `INSERT` (las asigna la base
+  de datos). Para un dataset **sin cuarentena**, la secuencia de PostgreSQL
+  reproduce exactamente los ids que usó el motor (1, 2, 3…) y las FKs cuadran. Si
+  hay filas en cuarentena en una tabla con `SERIAL`, sus ids dejan un **hueco** y
+  la secuencia asignaría otros valores, dejando colgando cualquier FK que apuntara
+  a un id posterior al hueco. En ese caso **`export` rechaza el dataset con código
+  4, sin escribir el archivo** (`ExportIntegrityError`, nombrando tabla y columna):
+  nunca emite un `seed.sql` que violaría la integridad referencial al recargarse.
+  La traducción explícita de ids que permitiría exportarlo igualmente es del emisor
+  de base de datos del Hito 4. **`generate` con `--format csv`/`json` no tiene este
+  matiz** —cada fila lleva su id en la propia celda— y continúa con las filas
+  aceptadas.
 - **La reparación selectiva es del Hito 4.** En el H2, una fila que no pasa la
   validación pre-emisión va a **cuarentena** (con `on_error: quarantine`) o
   aborta la ejecución (`on_error: abort`, código 5); no se regenera. La cuarentena

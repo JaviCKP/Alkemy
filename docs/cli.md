@@ -29,10 +29,16 @@ terminal de 100 columnas.
 | `4` | Error de plan o de configuración (`PlanError` / `ConfigError`), con el mensaje completo. |
 | `5` | Generación abortada por `output.on_error: abort` ante una fila inválida. |
 
-Si al terminar `generate`/`export` la **cuarentena** no está vacía, se informa
-siempre (tabla, nº de filas y primer motivo) sin cambiar el código de salida
-(con `on_error: quarantine`, las filas inválidas se apartan y la ejecución es un
-éxito).
+La **cuarentena** no vacía se informa **siempre** (tabla, nº de filas y primer
+motivo), una sola vez, tanto si el comando termina con éxito como si falla
+después de generar. Con `on_error: quarantine`, `generate` (CSV/JSON) aparta las
+filas inválidas y termina con **éxito** (código 0): cada fila lleva su id en la
+propia celda, así que un hueco no rompe nada. **`export --format sql` es más
+estricto**: si la cuarentena deja un hueco en la secuencia de una columna
+autoincremental (`SERIAL`), cargar ese `seed.sql` desalinearía las FKs, así que
+`export` lo **rechaza con código 4** sin escribir el archivo (informando igualmente
+la cuarentena). En ambos casos, `on_error: abort` detiene la generación en la
+primera fila inválida con código `5`.
 
 ## `analyze`
 

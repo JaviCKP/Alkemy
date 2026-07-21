@@ -1,11 +1,13 @@
-"""Tests de seguridad de nombres de archivo CSV/JSON (revisión PR #42, hallazgo 2).
+"""Tests de seguridad de nombres de archivo CSV/JSON (revisión PR #42, hallazgos 2 y R3-1).
 
-`out_dir / f"{table.name}.csv"` permitía que un nombre de tabla como
-`"../escaped"` escribiera fuera de `--out`. Estos tests cubren la codificación
-segura e inyectiva (`_safe_table_filename`), la comprobación de contención
-dentro de `out_dir` (`_resolve_safe_path`) y la validación de colisiones antes
-de escribir el primer archivo (`validate_table_filenames`, invocada desde
-`generate_files`).
+`out_dir / f"{table.name}.csv"` permitía (a) escribir fuera de `--out` con un
+nombre como `"../escaped"` y (b) que dos tablas PostgreSQL que solo difieren en
+mayúsculas (`foo` y `"FOO"`) se pisaran en Windows/macOS, donde el sistema de
+archivos es insensible a mayúsculas. Estos tests cubren la codificación segura
+e **inyectiva bajo comparación insensible a mayúsculas** (`_safe_table_filename`),
+la contención dentro de `out_dir` (`_resolve_safe_path`) y la validación de
+colisiones case-insensitive antes de escribir el primer archivo
+(`validate_table_filenames`, invocada desde `generate_files`).
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from synthdb.emit import generate_files
+from synthdb.emit import EmitPathError, generate_files
 from synthdb.emit.csv_json import (
     CsvSink,
     _resolve_safe_path,
@@ -35,61 +37,121 @@ def _table(name: str, schema: str | None = None) -> TableSpec:
     )
 
 
-# --- Codificación: normal, path traversal, control, Windows, colisión -------
+def _fname(name: str, schema: str | None = None, ext: str = "csv") -> str:
+    return _safe_table_filename(_table(name, schema), ext)
 
 
-def test_normal_table_name_is_unchanged() -> None:
-    # Comportamiento previo preservado a propósito para el caso común.
-    assert _safe_table_filename(_table("clientes"), "csv") == "clientes.csv"
-    assert _safe_table_filename(_table("clientes"), "json") == "clientes.json"
+# --- Caso normal y codificación ---------------------------------------------
+
+
+def test_normal_lowercase_table_name_is_unchanged() -> None:
+    # Comportamiento del caso común preservado a propósito.
+    assert _fname("clientes") == "clientes.csv"
+    assert _fname("clientes", ext="json") == "clientes.json"
+    assert _fname("pedidos_uk") == "pedidos_uk.csv"
 
 
 @pytest.mark.parametrize(
     "malicious_name",
-    [
-        "../escaped",
-        "..\\escaped",
-        "../../etc/passwd",
-        "a/b",
-        "a" + chr(92) + "b",
-        "..",
-        ".",
-    ],
+    ["../escaped", "..\\escaped", "../../etc/passwd", "a/b", "a" + chr(92) + "b", "..", "."],
 )
 def test_path_traversal_names_are_encoded_away(malicious_name: str) -> None:
-    filename = _safe_table_filename(_table(malicious_name), "csv")
+    filename = _fname(malicious_name)
     assert "/" not in filename
     assert "\\" not in filename
-    assert ".." not in filename.removesuffix(".csv")  # el '..' del propio nombre, codificado
+    assert ".." not in filename.removesuffix(".csv")
 
 
 def test_control_characters_and_percent_are_encoded() -> None:
-    filename = _safe_table_filename(_table("a\x00b\tc%d"), "csv")
+    filename = _fname("a\x00b\tc%d")
     assert "\x00" not in filename
     assert "\t" not in filename
-    # El propio '%' se codifica también, o el esquema dejaría de ser inyectivo.
-    assert "%25" in filename
+    assert "%25" in filename  # el propio '%' se codifica: esquema inyectivo
 
 
-@pytest.mark.parametrize("reserved", ["CON", "con", "PRN", "aux", "NUL", "com1", "LPT9"])
-def test_windows_reserved_device_names_are_prefixed(reserved: str) -> None:
-    filename = _safe_table_filename(_table(reserved), "csv")
-    stem = filename.removesuffix(".csv")
-    assert stem.lower() not in {"con", "prn", "aux", "nul", "com1", "lpt9"}
-    assert stem == f"_{reserved}"
+def test_encoding_output_is_entirely_lowercase() -> None:
+    # La salida en minúsculas es lo que garantiza la inyectividad bajo
+    # comparación insensible a mayúsculas: casefold es la identidad.
+    for name in ["Foo", "FOO", "CamelCase", "MiXeD_123", "ÑOÑO"]:
+        filename = _fname(name)
+        assert filename == filename.casefold()
 
 
-def test_two_distinct_encodings_never_collide_for_different_names() -> None:
-    names = ["clientes", "../clientes", "CLIENTES", "cliéntes", "cli%65ntes", "cli.entes"]
-    filenames = {_safe_table_filename(_table(n), "csv") for n in names}
-    assert len(filenames) == len(names)
+# --- Inyectividad bajo comparación insensible a mayúsculas (R3-1) ------------
 
 
-def test_schema_qualified_tables_do_not_collide_with_same_named_table() -> None:
-    unqualified = _safe_table_filename(_table("foo"), "csv")
-    qualified_a = _safe_table_filename(_table("foo", schema="a"), "csv")
-    qualified_b = _safe_table_filename(_table("foo", schema="b"), "csv")
-    assert len({unqualified, qualified_a, qualified_b}) == 3
+def test_case_only_variants_produce_casefold_distinct_filenames() -> None:
+    # El bug original: en Windows, foo.csv y FOO.csv son el mismo archivo.
+    variants = ["foo", "Foo", "FOO", "fOo"]
+    casefolded = {_fname(v).casefold() for v in variants}
+    assert len(casefolded) == len(variants)
+    assert _fname("foo") == "foo.csv"  # el normal minúsculas no cambia
+
+
+def test_schema_case_only_variants_are_casefold_distinct() -> None:
+    # schemas a.foo / A.foo deben producir archivos distintos también en NTFS.
+    assert _fname("foo", schema="a").casefold() != _fname("foo", schema="A").casefold()
+    # y esquemas distintos con la misma tabla, también.
+    assert _fname("foo", schema="a").casefold() != _fname("foo", schema="b").casefold()
+
+
+def test_many_distinct_names_never_casefold_collide() -> None:
+    names = [
+        "clientes",
+        "../clientes",
+        "CLIENTES",
+        "Clientes",
+        "cliéntes",
+        "cli%65ntes",
+        "cli.entes",
+    ]
+    casefolded = {_fname(n).casefold() for n in names}
+    assert len(casefolded) == len(names)
+
+
+def test_schema_qualified_does_not_collide_with_same_named_table() -> None:
+    keys = {
+        _fname("foo").casefold(),
+        _fname("foo", schema="a").casefold(),
+        _fname("foo", schema="b").casefold(),
+    }
+    assert len(keys) == 3
+
+
+# --- Nombres reservados de Windows: sin prefijo que pueda colisionar --------
+
+
+@pytest.mark.parametrize("reserved", ["con", "prn", "aux", "nul", "com1", "lpt9"])
+def test_reserved_device_name_is_not_a_prefixed_real_name(reserved: str) -> None:
+    # Un nombre reservado en minúsculas NO se resuelve como `_con` (que
+    # colisionaría con una tabla real `_con`), sino escapando su primer
+    # carácter, forma que ningún nombre normal produce.
+    reserved_file = _fname(reserved)
+    stem = reserved_file.removesuffix(".csv")
+    # El primer componente (antes del primer punto) ya no es un dispositivo.
+    assert stem.split(".")[0].casefold() not in {"con", "prn", "aux", "nul", "com1", "lpt9"}
+    assert stem != "_" + reserved  # explícitamente: NO es el prefijo `_`
+    # Y no colisiona (case-insensitive) con la tabla real `_<reservado>`.
+    real = _fname("_" + reserved)
+    assert reserved_file.casefold() != real.casefold()
+
+
+def test_uppercase_quoted_reserved_name_is_distinct_from_lowercase_and_underscore() -> None:
+    # `"CON"` (citada, IR name "CON") vs `CON`→`con` vs `_CON`/`_con`.
+    keys = {
+        _fname("CON").casefold(),
+        _fname("con").casefold(),
+        _fname("_con").casefold(),
+        _fname("_CON").casefold(),
+    }
+    assert len(keys) == 4
+
+
+def test_reserved_schema_first_component_is_escaped() -> None:
+    # schema `con` cualificando `foo`: en Windows `con.foo.csv` trataría `con`
+    # como dispositivo. El primer componente se escapa.
+    stem = _fname("foo", schema="con").removesuffix(".csv")
+    assert stem.split(".")[0].casefold() not in {"con", "prn", "aux", "nul"}
 
 
 # --- Contención dentro de out_dir -------------------------------------------
@@ -100,16 +162,13 @@ def test_resolved_path_stays_within_out_dir(tmp_path: Path) -> None:
     assert path.resolve().parent == tmp_path.resolve()
 
 
-def test_csv_sink_actually_writes_inside_out_dir_for_traversal_name(tmp_path: Path) -> None:
+def test_csv_sink_writes_inside_out_dir_for_traversal_name(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     sink = CsvSink(out_dir)
     sink.write_table(_table("../escaped"), [{"id": 1}])
     written = sink.paths[0]
-    # La ruta escrita está DENTRO de out_dir, no en tmp_path directamente ni
-    # en ningún ancestro.
     assert written.resolve().parent == out_dir.resolve()
     assert written.exists()
-    # Y no se creó ningún archivo fuera de out_dir con el nombre crudo.
     assert not (tmp_path / "escaped.csv").exists()
     assert not (tmp_path.parent / "escaped.csv").exists()
 
@@ -117,29 +176,57 @@ def test_csv_sink_actually_writes_inside_out_dir_for_traversal_name(tmp_path: Pa
 # --- Validación de colisiones ANTES de escribir -----------------------------
 
 
-def test_validate_table_filenames_raises_on_genuine_collision(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="mismo archivo de salida"):
+def test_validate_raises_emit_path_error_on_genuine_collision(tmp_path: Path) -> None:
+    with pytest.raises(EmitPathError, match="mismo archivo de salida"):
         validate_table_filenames([_table("dup"), _table("dup")], tmp_path, "csv")
 
 
-def test_validate_table_filenames_accepts_distinct_tables(tmp_path: Path) -> None:
-    validate_table_filenames([_table("a"), _table("b"), _table("c")], tmp_path, "csv")  # no raise
+def test_validate_accepts_case_variants_as_distinct(tmp_path: Path) -> None:
+    # foo y FOO NO colisionan con la codificación nueva (antes sí, en NTFS).
+    validate_table_filenames([_table("foo"), _table("FOO")], tmp_path, "csv")  # no raise
 
 
-def test_generate_files_rejects_colliding_schema_before_writing_anything(
-    tmp_path: Path,
-) -> None:
-    # Tres tablas; la tercera colisiona con la primera. Si la validación no
-    # fuera previa a TODO el bucle de escritura, "a" y "b" ya se habrían
-    # escrito cuando la colisión de la tercera aborta la ejecución.
+def test_generate_files_rejects_collision_before_writing_anything(tmp_path: Path) -> None:
     out_dir = tmp_path / "out"
     spec = SchemaSpec(dialect="postgres", tables=[_table("a"), _table("b"), _table("a")])
     dataset = Dataset(
         tables={"a": [{"id": 1}], "b": [{"id": 2}]}, phases=[InsertPhase(tables=["a", "b"])]
     )
-
-    with pytest.raises(ValueError, match="mismo archivo de salida"):
+    with pytest.raises(EmitPathError, match="mismo archivo de salida"):
         generate_files(spec, dataset, out_dir, "csv")
-
-    # Ningún archivo parcial: el directorio ni siquiera debería tener 'a.csv'.
+    # Ningún archivo parcial.
     assert not out_dir.exists() or list(out_dir.iterdir()) == []
+
+
+# --- Dos archivos reales con contenido correcto (bug NTFS/APFS) --------------
+
+
+@pytest.mark.parametrize("ext", ["csv", "json"])
+def test_case_variant_tables_write_two_real_files_with_correct_content(
+    tmp_path: Path, ext: str
+) -> None:
+    # El corazón del hallazgo: en un FS insensible a mayúsculas (Windows/macOS)
+    # las tablas `foo` y `FOO` DEBEN producir dos archivos físicos distintos,
+    # cada uno con SU contenido. Con la codificación anterior, en Windows
+    # quedaba un solo `foo.csv` con las filas de la 2ª tabla.
+    out_dir = tmp_path / "out"
+    spec = SchemaSpec(dialect="postgres", tables=[_table("foo"), _table("FOO")])
+    dataset = Dataset(
+        tables={"foo": [{"id": 11}], "FOO": [{"id": 22}]},
+        phases=[InsertPhase(tables=["foo", "FOO"])],
+    )
+    paths = generate_files(spec, dataset, out_dir, ext)
+
+    on_disk = sorted(out_dir.glob(f"*.{ext}"))
+    assert len(on_disk) == 2, on_disk  # dos archivos físicos, ninguno pisado
+    assert len({p.name.casefold() for p in on_disk}) == 2
+
+    contents = {p.name: p.read_text(encoding="utf-8") for p in on_disk}
+    # `foo` (minúsculas) conserva su nombre literal.
+    assert "foo." + ext in contents
+    # Cada archivo lleva SU id, no el de la otra tabla.
+    lower_file = next(p for p in paths if p.name == "foo." + ext)
+    upper_file = next(p for p in paths if p.name != "foo." + ext)
+    assert "11" in lower_file.read_text(encoding="utf-8")
+    assert "22" in upper_file.read_text(encoding="utf-8")
+    assert lower_file.name.casefold() != upper_file.name.casefold()

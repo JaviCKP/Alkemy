@@ -49,7 +49,7 @@ from rich.text import Text
 from synthdb.config.loader import ConfigError, load_config
 from synthdb.config.models import Config
 from synthdb.constraints.check_interp import interpret_checks
-from synthdb.emit import ExportIntegrityError, generate_files, render_sql
+from synthdb.emit import EmitPathError, ExportIntegrityError, generate_files, render_sql
 from synthdb.generation.engine import Dataset, GenerationError, generate_dataset
 from synthdb.generation.engine import PlanError as EnginePlanError
 from synthdb.graph.dependency import analyze_structure
@@ -523,15 +523,16 @@ def generate(
         _report_quarantine(spec, dataset, stderr)
         return
 
+    # La cuarentena se informa en el `finally`: EXACTAMENTE una vez, tanto si la
+    # escritura tiene éxito como si un error posterior a la generación (E/S,
+    # colisión de nombres) aborta (revisión PR #42, R3-2).
     try:
-        paths = generate_files(spec, dataset, out_dir, fmt)
-    except (OSError, UnicodeError) as exc:
-        stderr.print(_io_error_message(exc, out_dir), markup=False)
-        raise typer.Exit(_EXIT_IO_ERROR) from exc
-    console.print(f"Escritos {len(paths)} archivo(s) {fmt.upper()} en {out_dir}:", markup=False)
-    for written in paths:
-        console.print(f"  {written}", markup=False)
-    _report_quarantine(spec, dataset, stderr)
+        paths = _write_files_or_exit(spec, dataset, out_dir, fmt, stderr)
+        console.print(f"Escritos {len(paths)} archivo(s) {fmt.upper()} en {out_dir}:", markup=False)
+        for written in paths:
+            console.print(f"  {written}", markup=False)
+    finally:
+        _report_quarantine(spec, dataset, stderr)
 
 
 @app.command()
@@ -598,22 +599,52 @@ def export(
         _report_quarantine(spec, dataset, stderr)
         return
 
-    script = _render_sql_or_exit(spec, dataset, config, stderr)
+    # La cuarentena se informa en el `finally`: EXACTAMENTE una vez, también si
+    # `render_sql` rechaza el Dataset (hueco SERIAL ⇒ `ExportIntegrityError`) o
+    # la escritura falla tras la generación (revisión PR #42, R3-2).
+    try:
+        script = _render_sql_or_exit(spec, dataset, config, stderr)
+        _write_seed_sql_or_exit(out, script, stderr)
+        console.print(f"Escrito {out} ({len(script)} bytes).", markup=False)
+    finally:
+        _report_quarantine(spec, dataset, stderr)
+
+
+# --- Ayudantes compartidos de los comandos de generación --------------------
+
+
+def _write_files_or_exit(
+    spec: SchemaSpec, dataset: Dataset, out_dir: Path, fmt: str, stderr: Console
+) -> list[Path]:
+    """Escribe los CSV/JSON o sale con el código adecuado, sin traceback.
+
+    `EmitPathError` (colisión de nombres de archivo o ruta que escaparía de
+    `out_dir`, revisión PR #42 R3-1) ⇒ código 4; error de E/S ⇒ código 3.
+    Ningún `ValueError` ni `OSError` se escapa a un traceback.
+    """
+    try:
+        return generate_files(spec, dataset, out_dir, fmt)
+    except EmitPathError as exc:
+        stderr.print(str(exc), markup=False)
+        raise typer.Exit(_EXIT_PLAN_OR_CONFIG_ERROR) from exc
+    except (OSError, UnicodeError) as exc:
+        stderr.print(_io_error_message(exc, out_dir), markup=False)
+        raise typer.Exit(_EXIT_IO_ERROR) from exc
+
+
+def _write_seed_sql_or_exit(out: Path, script: str, stderr: Console) -> None:
+    r"""Escribe el `seed.sql` como bytes UTF-8, o sale con código 3 ante un error de E/S.
+
+    `write_bytes`, no `write_text`: `script` lleva `\\n` entre sentencias y
+    `Path.write_text` sin `newline=""` los traduciría a `\\r\\n` en Windows,
+    rompiendo la reproducibilidad byte a byte (revisión PR #42, hallazgo 6).
+    """
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        # `write_bytes`, no `write_text`: `script` lleva `\n` entre sentencias
-        # y `Path.write_text` sin `newline=""` los traduciría a `\r\n` en
-        # Windows, rompiendo la reproducibilidad byte a byte (revisión PR
-        # #42, hallazgo 6).
         out.write_bytes(script.encode("utf-8"))
     except (OSError, UnicodeError) as exc:
         stderr.print(_io_error_message(exc, out), markup=False)
         raise typer.Exit(_EXIT_IO_ERROR) from exc
-    console.print(f"Escrito {out} ({len(script)} bytes).", markup=False)
-    _report_quarantine(spec, dataset, stderr)
-
-
-# --- Ayudantes compartidos de los comandos de generación --------------------
 
 
 def _render_sql_or_exit(spec: SchemaSpec, dataset: Dataset, config: Config, stderr: Console) -> str:

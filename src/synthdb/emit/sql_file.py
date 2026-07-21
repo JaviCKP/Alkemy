@@ -1,4 +1,4 @@
-"""Emisor de `seed.sql` para PostgreSQL (T2.14, especificacion.md §11).
+r"""Emisor de `seed.sql` para PostgreSQL (T2.14, especificacion.md §11).
 
 `synthdb export --format sql` recorre las **fases** del plan del `Dataset` y
 produce un script cargable en un PostgreSQL que ya tenga el esquema creado
@@ -7,11 +7,24 @@ produce un script cargable en un PostgreSQL que ya tenga el esquema creado
 
 Garantías del archivo (criterios del Hito 2 y CLAUDE.md):
 
-- **Todo literal se renderiza con el generador de expresiones de sqlglot**
-  (`exp.Literal`, `exp.Array`, `exp.null/true/false`, dialecto `postgres`).
-  Jamás se concatena SQL a mano ni se escapa una comilla artesanalmente: esa es
-  la barrera anti-inyección del archivo. sqlglot dobla las comillas simples de
-  las cadenas y las dobles de los identificadores.
+- **Los literales ESCALARES se renderizan con el generador de expresiones de
+  sqlglot** (`exp.Literal`, `exp.null/true/false`, dialecto `postgres`): sqlglot
+  dobla las comillas simples de las cadenas y las dobles de los identificadores.
+  Jamás se concatena SQL a mano ni se escapa una comilla artesanalmente.
+- **Los ARRAYS** (vacíos o no) se emiten como **un único literal de texto** en el
+  formato nativo de arrays de PostgreSQL (`'{}'`, `'{a,b}'`, `'{"a,b","c\"d"}'`),
+  no con el constructor `ARRAY[...]` ni un `CAST`. Dos niveles de escapado, ambos
+  deterministas y sin invención propia: (1) el CONTENIDO del array se codifica
+  según el formato documentado de PostgreSQL (§8.15.2, «Array Value Input») —cada
+  elemento que contenga coma, llave, comilla doble, backslash o espacio, o que sea
+  el literal `NULL`, se entrecomilla con `"..."` doblando `\\`/`"`—, y (2) el
+  literal SQL exterior que envuelve todo el array lo sigue escapando **sqlglot**
+  (`exp.Literal.string`), que dobla las comillas simples. La razón de no usar
+  `ARRAY[...]`: ese constructor resuelve su tipo a `text[]` a partir de sus
+  elementos ANTES de que el contexto de la columna intervenga, y falla al
+  asignarse a un array cuyo tipo no sea `text[]` (p. ej. `enum[]`); un literal de
+  texto sin tipar, en cambio, PostgreSQL lo resuelve contra el tipo real de la
+  columna destino. Verificado con round-trip contra PostgreSQL real en CI.
 - **Orden de fases estricto.** Cada `Phase` del plan se emite en orden: los
   `INSERT` de una `InsertPhase`/`InsertLeveledPhase`/`DeferredPhase` y, después,
   la `UpdatePhase` que cierra un ciclo (columnas insertadas a `NULL` y luego
@@ -21,7 +34,9 @@ Garantías del archivo (criterios del Hito 2 y CLAUDE.md):
 - **Columnas autoincrementales (`SERIAL`) y `GENERATED` se omiten** del `INSERT`:
   las asigna la base de datos. Para un dataset sin cuarentena, la secuencia de
   PostgreSQL reproduce los mismos ids que usó el motor (1, 2, 3…), así que las
-  FKs cuadran; ver `docs/limitations.md` sobre el caso con cuarentena.
+  FKs cuadran; con huecos por cuarentena en una tabla autoincremental, `render_sql`
+  **rechaza el dataset** (`ExportIntegrityError`) en vez de emitir un `seed.sql`
+  que violaría la integridad referencial al recargarse (ver `_check_autoincrement_sequence`).
 - **Nombres cualificados con esquema** cuando la `TableSpec` lo tiene, y
   **identificadores entrecomillados solo cuando el plegado de PostgreSQL lo
   exige** (mayúsculas, caracteres especiales, palabra reservada): un nombre en

@@ -37,41 +37,70 @@ from typing import Any
 
 from synthdb.ir.schema import TableSpec
 
-_SAFE_FILENAME_BYTES = frozenset(
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
-)
-"""Bytes que un componente de nombre de archivo conserva tal cual (revisión PR
-#42, hallazgo 2). Cualquier otro byte -separadores de ruta (`/`, `\\`), `..`,
-`.`, espacios, caracteres de control y cualquier byte no-ASCII de una
-secuencia UTF-8- se percent-encodea como `%XX` (dos hex mayúsculas). El propio
-`%` también se codifica, así que el esquema es inyectivo: dos nombres de tabla
-distintos jamás producen el mismo texto codificado, y ningún nombre puede
-introducir un separador de ruta o un `..` en el resultado."""
+
+class EmitPathError(ValueError):
+    """No se puede derivar un nombre de archivo seguro y único para una tabla.
+
+    Colisión entre dos tablas que producirían el mismo archivo (bajo
+    comparación insensible a mayúsculas, como en Windows/macOS) o una ruta que
+    escaparía del directorio de salida. La CLI la mapea a un código de salida
+    accionable, sin traceback (revisión PR #42).
+    """
+
+
+_SAFE_FILENAME_BYTES = frozenset(b"abcdefghijklmnopqrstuvwxyz0123456789_-")
+"""Bytes que un componente de nombre de archivo conserva tal cual: **solo
+minúsculas** ASCII, dígitos, `_` y `-` (revisión PR #42, hallazgos 2 y R3-1).
+Todo lo demás -incluidas las MAYÚSCULAS A-Z, separadores de ruta (`/`, `\\`),
+`.`, `..`, espacios, control y cualquier byte no-ASCII- se percent-encodea con
+`%xx` en hex **minúsculo**. Que las mayúsculas se codifiquen y la salida sea
+enteramente minúscula es lo que hace la codificación inyectiva **también bajo
+comparación insensible a mayúsculas** (NTFS/APFS): `foo`→`foo`, `Foo`→`%46oo`,
+`FOO`→`%46%4f%4f` son distintos incluso al plegar mayúsculas. El propio `%` se
+codifica (`%25`), así que el esquema es autodelimitado (todo `%` inicia un
+triplete `%xx`) y por tanto inyectivo: nombres distintos ⇒ codificaciones
+distintas, y ninguno puede introducir un separador de ruta ni un `..`."""
 
 _WINDOWS_RESERVED_STEMS = frozenset(
     {"con", "prn", "aux", "nul"}
     | {f"com{i}" for i in range(1, 10)}
     | {f"lpt{i}" for i in range(1, 10)}
 )
-"""Nombres de dispositivo reservados de Windows (comparación insensible a
-mayúsculas): prohibidos como base de un nombre de archivo con cualquier
-extensión, no solo sin ella."""
+"""Nombres de dispositivo reservados de Windows: prohibidos como base de un
+nombre de archivo con cualquier extensión, y (para nombres con varios puntos)
+como el primer componente antes del primer punto."""
 
 
 def _encode_name_component(name: str) -> str:
-    """Codifica `name` a un componente de nombre de archivo seguro e inyectivo.
+    """Codifica `name` a un componente de archivo seguro, inyectivo y en minúsculas.
 
     Percent-encoding sobre los bytes UTF-8 de `name`: todo byte fuera de
-    `_SAFE_FILENAME_BYTES` se sustituye por `%XX`. Determinista, sin
-    dependencia del sistema operativo ni del locale.
+    `_SAFE_FILENAME_BYTES` (incluidas las mayúsculas) se sustituye por `%xx`
+    con hex minúsculo. Determinista, sin dependencia del SO ni del locale, y
+    con salida enteramente en minúsculas para ser inyectiva bajo comparación
+    insensible a mayúsculas.
     """
     parts = []
     for byte in name.encode("utf-8"):
         if byte in _SAFE_FILENAME_BYTES:
             parts.append(chr(byte))
         else:
-            parts.append(f"%{byte:02X}")
+            parts.append(f"%{byte:02x}")
     return "".join(parts)
+
+
+def _escape_first_char(component: str) -> str:
+    """Percent-encodea el primer carácter de un componente (para nombres reservados).
+
+    Solo se aplica a un componente que YA es un nombre de dispositivo
+    reservado de Windows (`con`, `com1`...): esos son ASCII y empiezan por una
+    letra minúscula segura, así que codificar su primer byte (`con`→`%63on`)
+    produce una forma que **ningún nombre normal genera** -una letra segura
+    jamás se percent-encodea-, con lo que no puede colisionar con una tabla
+    real llamada, p. ej., `_con`. Prefijar con `_` sí colisionaría (`_con` es
+    un nombre de tabla válido); por eso NO se usa un prefijo.
+    """
+    return f"%{ord(component[0]):02x}{component[1:]}"
 
 
 def _table_identity(table: TableSpec) -> str:
@@ -80,25 +109,27 @@ def _table_identity(table: TableSpec) -> str:
 
 
 def _safe_table_filename(table: TableSpec, ext: str) -> str:
-    """Nombre de archivo determinista, inyectivo y seguro para `table`.
+    """Nombre de archivo determinista, inyectivo (case-insensitive) y seguro.
 
-    Una tabla sin `schema_` y con un nombre ya seguro produce exactamente
-    `<tabla>.<ext>` -el comportamiento previo a esta revisión, preservado a
-    propósito para el caso normal-. Cualquier carácter fuera de
-    `[A-Za-z0-9_-]` (separadores de ruta, `..`, control, espacios, Unicode) se
-    percent-encodea (`_encode_name_component`); una tabla cualificada con
-    esquema antepone el esquema codificado y un `.` propio, lo que evita la
-    colisión entre `esquemaA.tabla` y `esquemaB.tabla` -que antes de esta
-    revisión escribían ambas en `tabla.csv`-. Un resultado que choque con un
-    nombre de dispositivo reservado de Windows (`CON`, `PRN`...) se prefija
-    con `_`.
+    Una tabla sin `schema_` y con un nombre ya en minúsculas seguro produce
+    exactamente `<tabla>.<ext>` (caso normal preservado). Cualquier otro
+    carácter -incluidas mayúsculas, separadores de ruta, `..`, control,
+    espacios y Unicode- se percent-encodea (`_encode_name_component`), con
+    salida en minúsculas para no colisionar en Windows/macOS. Una tabla
+    cualificada antepone el esquema codificado y un `.` separador; como el
+    `.` que pudiera aparecer en un nombre se codifica a `%2e`, el único `.`
+    literal del *stem* es ese separador, lo que distingue sin ambigüedad
+    `esquema.tabla` de una tabla llamada `esquema.tabla`. Si el **primer
+    componente** (esquema si lo hay, si no la tabla) coincide con un nombre de
+    dispositivo reservado de Windows, se escapa su primer carácter
+    (`_escape_first_char`) en vez de prefijarlo.
     """
-    parts = [_encode_name_component(table.name)]
+    components = [_encode_name_component(table.name)]
     if table.schema_:
-        parts = [_encode_name_component(table.schema_), _encode_name_component(table.name)]
-    stem = ".".join(parts)
-    if not stem or stem.lower() in _WINDOWS_RESERVED_STEMS:
-        stem = f"_{stem}"
+        components = [_encode_name_component(table.schema_), _encode_name_component(table.name)]
+    if components[0].casefold() in _WINDOWS_RESERVED_STEMS:
+        components[0] = _escape_first_char(components[0])
+    stem = ".".join(components)
     return f"{stem}.{ext}"
 
 
@@ -108,14 +139,13 @@ def _resolve_safe_path(out_dir: Path, table: TableSpec, ext: str) -> Path:
     El esquema de `_safe_table_filename` garantiza matemáticamente que el
     resultado no puede escapar de `out_dir` (nunca produce `/`, `\\` ni `..`
     crudos), pero se resuelve y se comprueba de forma explícita como defensa
-    en profundidad (hallazgo 2 de la revisión del PR #42): si algún caso no
-    previsto lo violara, falla con un error accionable en vez de escribir
-    fuera del directorio pedido.
+    en profundidad (revisión PR #42): si algún caso no previsto lo violara,
+    falla con `EmitPathError` en vez de escribir fuera del directorio pedido.
     """
     filename = _safe_table_filename(table, ext)
     candidate = out_dir / filename
     if candidate.resolve().parent != out_dir.resolve():
-        raise ValueError(
+        raise EmitPathError(
             f"tabla {_table_identity(table)}: el archivo derivado ({filename!r}) "
             f"escaparía de {out_dir}. Esto no debería ocurrir con la codificación "
             "actual del nombre; repórtalo con el nombre exacto de la tabla."
@@ -126,11 +156,11 @@ def _resolve_safe_path(out_dir: Path, table: TableSpec, ext: str) -> Path:
 def validate_table_filenames(tables: Sequence[TableSpec], out_dir: Path, ext: str) -> None:
     """Calcula y valida el archivo de CADA tabla antes de escribir ninguno.
 
-    Detecta colisiones (dos tablas que producirían el mismo archivo de
-    salida) y cualquier ruta que escaparía de `out_dir`, recorriendo TODAS las
-    tablas antes de que `write_table` escriba la primera -para no dejar una
-    salida parcial si una tabla posterior de la lista es la que falla
-    (hallazgo 2 de la revisión del PR #42).
+    Detecta colisiones -dos tablas que producirían el mismo archivo bajo
+    comparación **insensible a mayúsculas** (como Windows/macOS)- y cualquier
+    ruta que escaparía de `out_dir`, recorriendo TODAS las tablas antes de que
+    `write_table` escriba la primera, para no dejar una salida parcial si la
+    que falla es una tabla posterior de la lista (revisión PR #42).
 
     Args:
         tables: Tablas del esquema, en el orden en que se van a escribir.
@@ -138,21 +168,22 @@ def validate_table_filenames(tables: Sequence[TableSpec], out_dir: Path, ext: st
         ext: Extensión sin punto (`"csv"` o `"json"`).
 
     Raises:
-        ValueError: si dos tablas colisionan en el mismo archivo, o si alguna
-            ruta resuelta escaparía de `out_dir`.
+        EmitPathError: si dos tablas colisionan en el mismo archivo (case-
+            insensitive), o si alguna ruta resuelta escaparía de `out_dir`.
     """
     seen: dict[str, str] = {}
     for table in tables:
         path = _resolve_safe_path(out_dir, table, ext)
         identity = _table_identity(table)
-        filename = path.name
-        if filename in seen:
-            raise ValueError(
-                f"las tablas {seen[filename]!r} y {identity!r} producirían el mismo "
-                f"archivo de salida ({filename!r}); no se puede generar sin ambigüedad. "
-                "Renombra una de las dos tablas o su esquema."
+        key = path.name.casefold()
+        if key in seen:
+            raise EmitPathError(
+                f"las tablas {seen[key]!r} y {identity!r} producirían el mismo "
+                f"archivo de salida ({path.name!r}, comparando sin distinguir "
+                "mayúsculas como en Windows/macOS); no se puede generar sin "
+                "ambigüedad. Renombra una de las dos tablas o su esquema."
             )
-        seen[filename] = identity
+        seen[key] = identity
 
 
 def _json_default(value: Any) -> Any:

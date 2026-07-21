@@ -13,13 +13,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from synthdb.emit.base import Sink, write_dataset
-from synthdb.emit.csv_json import CsvSink, JsonSink, validate_table_filenames
+from synthdb.emit.csv_json import CsvSink, EmitPathError, JsonSink, validate_table_filenames
 from synthdb.emit.sql_file import ExportIntegrityError, render_sql
 from synthdb.generation.engine import Dataset
 from synthdb.ir.schema import SchemaSpec
 
 __all__ = [
     "CsvSink",
+    "EmitPathError",
     "ExportIntegrityError",
     "JsonSink",
     "Sink",
@@ -42,10 +43,11 @@ def generate_files(spec: SchemaSpec, dataset: Dataset, out_dir: str | Path, fmt:
         Las rutas de los archivos escritos, en el orden de las tablas.
 
     Raises:
-        ValueError: Si `fmt` no es `"csv"` ni `"json"`, o si dos tablas
-            producirían el mismo archivo de salida (validado ANTES de escribir
-            ninguna, para no dejar una salida parcial; hallazgo 2 de la
-            revisión del PR #42).
+        ValueError: Si `fmt` no es `"csv"` ni `"json"`.
+        EmitPathError: Si dos tablas producirían el mismo archivo de salida
+            (comparando sin distinguir mayúsculas, como en Windows/macOS) o si
+            una ruta escaparía de `out_dir`. Se valida ANTES de escribir
+            ninguna, para no dejar una salida parcial (revisión PR #42).
     """
     if fmt not in {"csv", "json"}:
         raise ValueError(f"formato de salida no soportado: {fmt!r} (usa 'csv' o 'json').")

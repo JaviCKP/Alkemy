@@ -15,7 +15,11 @@ permite cargarlo aunque la FK no sea diferible.
 
 from __future__ import annotations
 
+import datetime
+import json
 import os
+import uuid
+from decimal import Decimal
 
 import pytest
 
@@ -270,3 +274,130 @@ def test_empty_and_non_empty_enum_arrays_load_into_postgres() -> None:
         (2, ["happy"]),
         (3, ["happy", "sad", tricky_label, unicode_label]),
     ]
+
+
+# --- Seguridad (revisión PR #42, R3-3): round-trip de arrays por tipo --------
+
+# El serializador de arrays cambió a formato de texto nativo de PostgreSQL para
+# TODOS los tipos (no solo enum), así que se verifica el round-trip vacío y no
+# vacío de cada tipo de array soportado, con caracteres problemáticos.
+_ARR_BS = chr(92)  # un backslash, evitando escapes ambiguos en el fuente
+_TRICKY_TEXT = [
+    "",
+    "a,b",
+    'he said "hi"',
+    "back" + _ARR_BS + "slash",
+    "NULL",
+    "café ñ 日本",
+    "O'Brien",
+]
+_UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
+
+_ARRAY_COLUMNS: list[tuple[str, str, str]] = [
+    # (nombre de columna, kind de la IR, tipo SQL del elemento para el DDL)
+    ("t_text", "text", "text"),
+    ("t_numeric", "numeric", "numeric"),
+    ("t_date", "date", "date"),
+    ("t_ts", "timestamp", "timestamp"),
+    ("t_bool", "boolean", "boolean"),
+    ("t_uuid", "uuid", "uuid"),
+    ("t_json", "json", "json"),
+    ("t_bytea", "bytea", "bytea"),
+    ("t_enum", "enum", "color_enum"),
+]
+
+_NON_EMPTY: dict[str, list[object]] = {
+    "t_text": _TRICKY_TEXT,
+    "t_numeric": [Decimal("1.50"), Decimal("-2.25")],
+    "t_date": [datetime.date(2020, 1, 2), datetime.date(1999, 12, 31)],
+    "t_ts": [datetime.datetime(2020, 1, 2, 3, 4, 5)],
+    "t_bool": [True, False],
+    "t_uuid": [_UUID],
+    "t_json": [{"a": 1}, {"b": "x,y"}],
+    "t_bytea": [b"\xde\xad", b"\x00\xff"],
+    "t_enum": ["red", "green,ish"],
+}
+
+
+def _array_roundtrip_spec() -> SchemaSpec:
+    columns = [
+        ColumnSpec(name="id", type=TypeSpec(kind="integer", autoincrement=True), nullable=False)
+    ]
+    for name, kind, _sql in _ARRAY_COLUMNS:
+        columns.append(
+            ColumnSpec(
+                name=name,
+                type=TypeSpec(kind=kind, is_array=True),
+                nullable=False,
+                enum_values=["red", "green,ish"] if kind == "enum" else None,
+            )
+        )
+    return SchemaSpec(
+        dialect="postgres",
+        tables=[TableSpec(name="arr", columns=columns, primary_key=["id"])],
+    )
+
+
+@pytest.mark.integration
+def test_array_types_round_trip_through_postgres() -> None:
+    """Todo tipo de array soportado carga y se relee igual, vacío y no vacío.
+
+    El literal de texto nativo (revisión PR #42, hallazgos 4 y R3-3) debe
+    round-trippear con comillas, comas, backslashes, el literal textual `NULL`
+    (que NO debe leerse como SQL NULL), la cadena vacía y Unicode, en `text`,
+    `numeric`, `date`, `timestamp`, `boolean`, `uuid`, `json`, `bytea` y un
+    `enum` de usuario.
+    """
+    url = os.environ.get("SYNTHDB_TEST_POSTGRES_URL")
+    if not url:
+        pytest.skip("SYNTHDB_TEST_POSTGRES_URL no está configurada")
+
+    spec = _array_roundtrip_spec()
+    empty_row = {"id": 1, **{name: [] for name, _k, _s in _ARRAY_COLUMNS}}
+    full_row = {"id": 2, **_NON_EMPTY}
+    dataset = Dataset(tables={"arr": [empty_row, full_row]}, phases=[InsertPhase(tables=["arr"])])
+    seed_sql = render_sql(spec, dataset, Config())
+
+    col_defs = ", ".join(f"{name} {sql}[] NOT NULL" for name, _k, sql in _ARRAY_COLUMNS)
+    ddl = (
+        "DROP TABLE IF EXISTS arr CASCADE; DROP TYPE IF EXISTS color_enum;"
+        "CREATE TYPE color_enum AS ENUM ('red', 'green,ish');"
+        f"CREATE TABLE arr (id SERIAL PRIMARY KEY, {col_defs});"
+    )
+    # `t_json::text[]` y `t_enum::text[]`: psycopg no relee un `json[]` ni un
+    # `enum[]` de usuario a objetos Python; el cast a text[] (que no cambia los
+    # valores) los entrega como lista de cadenas.
+    select_cols = ", ".join(
+        f"{name}::text[]" if name in ("t_json", "t_enum") else name
+        for name, _k, _s in _ARRAY_COLUMNS
+    )
+
+    with psycopg.connect(url, autocommit=True) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(ddl)
+            cursor.execute(seed_sql)
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT {select_cols} FROM arr ORDER BY id")
+            empty, full = cursor.fetchall()
+        with connection.cursor() as cursor:
+            cursor.execute("DROP TABLE arr CASCADE")
+            cursor.execute("DROP TYPE color_enum")
+
+    names = [name for name, _k, _s in _ARRAY_COLUMNS]
+    empty_by_col = dict(zip(names, empty, strict=True))
+    full_by_col = dict(zip(names, full, strict=True))
+
+    # Fila vacía: cada columna es una lista vacía (no NULL, no `{}` textual).
+    for name in names:
+        assert empty_by_col[name] == [], f"{name} vacío -> {empty_by_col[name]!r}"
+
+    # Fila no vacía: comparación por tipo.
+    assert full_by_col["t_text"] == _TRICKY_TEXT
+    assert full_by_col["t_numeric"] == [Decimal("1.50"), Decimal("-2.25")]
+    assert full_by_col["t_date"] == [datetime.date(2020, 1, 2), datetime.date(1999, 12, 31)]
+    assert full_by_col["t_ts"] == [datetime.datetime(2020, 1, 2, 3, 4, 5)]
+    assert full_by_col["t_bool"] == [True, False]
+    assert full_by_col["t_uuid"] == [_UUID]
+    assert [json.loads(x) for x in full_by_col["t_json"]] == [{"a": 1}, {"b": "x,y"}]
+    assert [bytes(x) for x in full_by_col["t_bytea"]] == [b"\xde\xad", b"\x00\xff"]
+    assert full_by_col["t_enum"] == ["red", "green,ish"]

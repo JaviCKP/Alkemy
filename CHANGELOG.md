@@ -19,12 +19,20 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     multiplataforma). `sql_file.py` emite un `seed.sql` de PostgreSQL dirigido por
     las fases del plan: `INSERT` multi-fila por lotes, `UpdatePhase` como `UPDATE`
     tras sus `INSERT`, `BEGIN`/`COMMIT` por fase y `SET CONSTRAINTS ALL DEFERRED`
-    en los ciclos diferibles. **Todos los literales se renderizan con el generador
-    de expresiones de sqlglot** (`exp.Literal`/`exp.Array`, dialecto postgres;
-    array vacío como `CAST(ARRAY[] AS ...[])`), nunca por concatenación —barrera
-    anti-inyección—; se omiten las columnas autoincrementales, se cualifican los
-    nombres con esquema y se entrecomillan los identificadores solo cuando el
-    plegado de PostgreSQL lo exige.
+    en los ciclos diferibles. **Los literales escalares se renderizan con el
+    generador de expresiones de sqlglot** (`exp.Literal`, dialecto postgres),
+    nunca por concatenación —barrera anti-inyección—; los **arrays** (vacíos o no)
+    se emiten como un único literal de texto en el **formato nativo de arrays de
+    PostgreSQL** (`'{}'`, `'{a,b}'`, `'{"a,b","c\"d"}'`), que sqlglot escapa como
+    literal SQL exterior y cuyo contenido se codifica según ese formato (elementos
+    con coma/llave/comilla/backslash/espacio o el literal `NULL` van entre comillas)
+    — así PostgreSQL lo resuelve contra el tipo real de la columna, también para
+    `enum[]`. Se omiten las columnas autoincrementales, se cualifican los nombres
+    con esquema y se entrecomillan los identificadores solo cuando el plegado de
+    PostgreSQL lo exige. `export` **rechaza** (código 4, sin escribir) un `seed.sql`
+    cuya secuencia de ids autoincrementales no sea contigua `1..N` (huecos por
+    cuarentena desalinearían las FKs al recargar); `generate` CSV/JSON no tiene ese
+    matiz (cada fila lleva su id) y continúa con las filas aceptadas.
   - **CLI (T2.15).** `synthdb plan RUTA.sql [-c config.yaml] [--json] [--no-llm]`
     muestra el plan por columna (generador/fuente/confianza/reglas/avisos) y las
     fases (`--no-llm` declarado como no-op hasta el H3; `--json` determinista).
