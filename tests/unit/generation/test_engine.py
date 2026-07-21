@@ -141,6 +141,35 @@ def test_qualified_self_reference_uses_the_canonical_table_name() -> None:
     assert all(row["manager_id"] is None or row["manager_id"] in ids for row in rows)
 
 
+def test_qualified_non_nullable_self_reference_points_roots_to_themselves() -> None:
+    spec = parse_ddl(
+        "CREATE TABLE public.employees ("
+        "id SERIAL PRIMARY KEY, "
+        "manager_id INT NOT NULL REFERENCES public.employees(id), "
+        "name TEXT NOT NULL"
+        ");"
+    )
+    dataset = generate_dataset(
+        spec,
+        Config(
+            seed=3,
+            tables={"employees": TableConfig(rows=4)},
+            hierarchy={"employees.manager_id": HierarchyConfig(branching=2, max_depth=3)},
+        ),
+    )
+
+    rows = dataset.tables["employees"]
+    levels = dataset.levels["employees"]
+    by_id = {row["id"]: level for row, level in zip(rows, levels, strict=True)}
+    assert dataset.quarantine == {}
+    assert len(rows) == len(levels) == 4
+    for row, level in zip(rows, levels, strict=True):
+        if level == 0:
+            assert row["manager_id"] == row["id"]
+        else:
+            assert by_id[row["manager_id"]] == level - 1
+
+
 def test_qualified_self_reference_closure_uses_canonical_table_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -164,6 +193,50 @@ def test_qualified_self_reference_closure_uses_canonical_table_name(
 
     assert dataset.tables["employees"] == []
     assert len(dataset.quarantine["employees"]) == 4
+    assert dataset.levels["employees"] == []
+    assert dataset.updates == []
+
+
+def test_qualified_foreign_key_uses_the_parent_canonical_name() -> None:
+    spec = parse_ddl(
+        "CREATE TABLE public.parent (id SERIAL PRIMARY KEY, name TEXT NOT NULL);"
+        "CREATE TABLE child (id SERIAL PRIMARY KEY, parent_id INT NOT NULL "
+        "REFERENCES public.parent(id));"
+    )
+    dataset = generate_dataset(
+        spec,
+        Config(tables={"parent": TableConfig(rows=3), "child": TableConfig(rows=6)}),
+    )
+
+    parent_ids = {row["id"] for row in dataset.tables["parent"]}
+    assert dataset.quarantine == {}
+    assert all(row["parent_id"] in parent_ids for row in dataset.tables["child"])
+
+
+def test_qualified_foreign_key_to_unique_uses_the_parent_canonical_name() -> None:
+    spec = parse_ddl(
+        "CREATE TABLE public.parent ("
+        "id SERIAL PRIMARY KEY, code INT NOT NULL UNIQUE"
+        ");"
+        "CREATE TABLE child (id SERIAL PRIMARY KEY, parent_code INT NOT NULL "
+        "REFERENCES public.parent(code));"
+    )
+    dataset = generate_dataset(
+        spec,
+        Config(
+            tables={
+                "parent": TableConfig(
+                    rows=3,
+                    columns={"code": ColumnConfig(generator="sequence", params={"start": 10})},
+                ),
+                "child": TableConfig(rows=6),
+            }
+        ),
+    )
+
+    parent_codes = {row["code"] for row in dataset.tables["parent"]}
+    assert dataset.quarantine == {}
+    assert all(row["parent_code"] in parent_codes for row in dataset.tables["child"])
 
 
 def test_text_array_and_quarantine_keep_the_rest_of_the_batch(

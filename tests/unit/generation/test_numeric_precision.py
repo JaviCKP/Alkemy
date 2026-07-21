@@ -18,6 +18,8 @@ from synthdb.config.models import ColumnConfig, Config, OutputConfig, TableConfi
 from synthdb.generation import engine
 from synthdb.generation.engine import PlanError, generate_dataset
 from synthdb.generation.generators import resolve
+from synthdb.generation.generators.base import GenContext
+from synthdb.generation.generators.numeric import NumericRangeGenerator, NumericRangeParams
 from synthdb.generation.numeric_bounds import (
     fits,
     has_quantized_value,
@@ -209,6 +211,23 @@ def test_numeric_range_large_scale_is_representable_and_batch_size_independent()
     assert all(isinstance(value, float) for value in values)
     assert all(fits(value, 1000, 500) for value in values)
     assert all(quantize_to_scale(value, 500).as_tuple().exponent == -500 for value in values)
+
+
+def test_numeric_range_samples_numeric_bounds_without_float_conversion(make_column) -> None:
+    class RecordingRng:
+        def random(self) -> float:
+            return 0.5
+
+        def uniform(self, low: float, high: float) -> float:
+            raise AssertionError(f"los límites NUMERIC no deben llegar como float: {low}, {high}")
+
+    column = make_column("numeric", precision=1000, scale=500)
+    value = NumericRangeGenerator(NumericRangeParams(min=0, max=1)).generate(
+        GenContext(rng=RecordingRng(), column=column, table="t")  # type: ignore[arg-type]
+    )
+
+    assert isinstance(value, float)
+    assert fits(value, 1000, 500)
 
 
 def test_numeric_range_handles_scale_larger_than_precision() -> None:
