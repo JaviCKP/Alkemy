@@ -168,7 +168,7 @@ def _resolve_self_reference(
     """Estrategia de autorreferencia por niveles (especificacion.md §6.3)."""
     fk = _self_reference_fk(by_name[table_name], by_name)
 
-    if fk.nullable:
+    if fk.nullable_columns and (not fk.match_full or len(fk.nullable_columns) == len(fk.columns)):
         return [InsertLeveledPhase(table=table_name, self_fk_columns=fk.columns)]
     if fk.deferrable:
         return [DeferredPhase(tables=[table_name])]

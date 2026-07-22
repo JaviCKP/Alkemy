@@ -6,11 +6,19 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
 from synthdb.config.loader import load_config
-from synthdb.config.models import ColumnConfig, Config, HierarchyConfig, OutputConfig, TableConfig
+from synthdb.config.models import (
+    ColumnConfig,
+    Config,
+    FkUniqueSubset,
+    HierarchyConfig,
+    OutputConfig,
+    TableConfig,
+)
 from synthdb.generation import engine
 from synthdb.generation.engine import Dataset, GenerationError, PlanError, generate_dataset
 from synthdb.ir.schema import SchemaSpec
@@ -76,6 +84,29 @@ def test_nullable_cycle_is_updated_to_valid_final_foreign_keys() -> None:
     assert dataset.updates
 
 
+def test_partial_nullable_composite_cycle_keeps_tenant_when_no_parent_matches() -> None:
+    dataset = generate_dataset(
+        _schema("crm_real_minimo.sql"),
+        Config(
+            seed=1,
+            tables={
+                "inmobiliarias": TableConfig(rows=5),
+                "clientes": TableConfig(rows=5),
+                "matches": TableConfig(rows=5),
+            },
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    assert any(row["match_id"] is None for row in dataset.tables["clientes"])
+    assert all(row["inmobiliaria_id"] is not None for row in dataset.tables["clientes"])
+    client_keys = {(row["inmobiliaria_id"], row["id"]) for row in dataset.tables["clientes"]}
+    assert all(
+        (row["inmobiliaria_id"], row["cliente_id"]) in client_keys
+        for row in dataset.tables["matches"]
+    )
+
+
 def test_deferrable_cycle_is_completed_before_final_validation() -> None:
     dataset = generate_dataset(
         _schema("ciclos_deferrable.sql"),
@@ -114,6 +145,274 @@ def test_self_reference_uses_only_previous_level(schema_name: str, roots_self: b
             assert row["manager_id"] == row["id"] if roots_self else row["manager_id"] is None
         else:
             assert by_id[row["manager_id"]] == level - 1
+
+
+def _multitenant_config(batch_size: int = 5000, customers_rows: int = 3) -> Config:
+    return Config(
+        seed=42,
+        defaults={"rows": 10},
+        tables={
+            "tenants": TableConfig(rows=3),
+            "operations": TableConfig(
+                rows=3,
+                fk={"tenant_id": FkUniqueSubset(strategy="unique_subset")},
+            ),
+            "customers": TableConfig(
+                rows=customers_rows,
+                fk={"tenant_id": FkUniqueSubset(strategy="unique_subset")},
+            ),
+            "offers": TableConfig(rows=15),
+        },
+        hierarchy={"offers.previous_id": HierarchyConfig(branching=2, max_depth=4)},
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+def test_composite_multitenant_self_reference_keeps_all_foreign_keys_valid() -> None:
+    dataset = generate_dataset(_schema("multitenant_autoref.sql"), _multitenant_config())
+
+    assert dataset.quarantine == {}
+    assert len(dataset.tables["offers"]) == len(dataset.levels["offers"]) == 15
+    operation_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["operations"]}
+    customer_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["customers"]}
+    offer_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["offers"]}
+    by_id = {
+        row["id"]: (row, level)
+        for row, level in zip(dataset.tables["offers"], dataset.levels["offers"], strict=True)
+    }
+
+    for row in dataset.tables["offers"]:
+        assert (row["tenant_id"], row["operation_id"]) in operation_keys
+        if row["customer_id"] is not None:
+            assert (row["tenant_id"], row["customer_id"]) in customer_keys
+        level = by_id[row["id"]][1]
+        if level == 0:
+            assert row["previous_id"] is None
+        else:
+            parent, parent_level = by_id[row["previous_id"]]
+            assert parent_level == level - 1
+            assert parent["tenant_id"] == row["tenant_id"]
+            assert (row["tenant_id"], row["previous_id"]) in offer_keys
+
+
+def test_composite_multitenant_self_reference_uuid_roots_point_to_self() -> None:
+    dataset = generate_dataset(_schema("multitenant_autoref_notnull.sql"), _multitenant_config())
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["offers"]
+    levels = dataset.levels["offers"]
+    for row, level in zip(rows, levels, strict=True):
+        if level == 0:
+            assert row["previous_id"] == row["id"]
+        else:
+            parent = next(parent for parent in rows if parent["id"] == row["previous_id"])
+            assert parent["tenant_id"] == row["tenant_id"]
+
+
+def test_partially_nullable_shared_fk_nulls_only_its_nullable_columns() -> None:
+    dataset = generate_dataset(
+        _schema("multitenant_autoref.sql"), _multitenant_config(customers_rows=1)
+    )
+
+    assert dataset.quarantine == {}
+    assert any(row["customer_id"] is None for row in dataset.tables["offers"])
+    assert all(row["tenant_id"] is not None for row in dataset.tables["offers"])
+    operation_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["operations"]}
+    assert all(
+        (row["tenant_id"], row["operation_id"]) in operation_keys
+        for row in dataset.tables["offers"]
+    )
+
+
+def test_composite_multitenant_generation_is_independent_of_batch_size() -> None:
+    small = generate_dataset(_schema("multitenant_autoref.sql"), _multitenant_config(2))
+    large = generate_dataset(_schema("multitenant_autoref.sql"), _multitenant_config(5000))
+
+    assert _digest(small) == _digest(large)
+    assert small.levels == large.levels
+
+
+def test_composite_fk_without_compatible_required_parent_fails_actionably() -> None:
+    spec = parse_ddl(
+        """
+        CREATE TABLE operations (
+            tenant_id UUID NOT NULL,
+            id UUID NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE customers (
+            tenant_id UUID NOT NULL,
+            id UUID NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE offers (
+            id UUID PRIMARY KEY,
+            tenant_id UUID NOT NULL,
+            operation_id UUID NOT NULL,
+            customer_id UUID NOT NULL,
+            previous_id UUID,
+            FOREIGN KEY (tenant_id, operation_id)
+                REFERENCES operations(tenant_id, id),
+            FOREIGN KEY (tenant_id, customer_id)
+                REFERENCES customers(tenant_id, id),
+            FOREIGN KEY (tenant_id, previous_id)
+                REFERENCES offers(tenant_id, id)
+        );
+        """
+    )
+    tenant_a = UUID("00000000-0000-0000-0000-000000000001")
+    tenant_b = UUID("00000000-0000-0000-0000-000000000002")
+    config = Config(
+        tables={
+            "operations": TableConfig(
+                rows=1,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [tenant_a]})
+                },
+            ),
+            "customers": TableConfig(
+                rows=1,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [tenant_b]})
+                },
+            ),
+            "offers": TableConfig(rows=1),
+        },
+        hierarchy={"offers.previous_id": HierarchyConfig(branching=2, max_depth=1)},
+    )
+
+    with pytest.raises(GenerationError, match=r"tabla offers.*no hay padre compatible"):
+        generate_dataset(spec, config)
+
+
+def test_shared_required_fks_choose_a_compatible_parent_combination() -> None:
+    spec = parse_ddl(
+        """
+        CREATE TABLE lefts (
+            tenant_id INT NOT NULL,
+            id INT NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE rights (
+            tenant_id INT NOT NULL,
+            id INT NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE links (
+            id INT PRIMARY KEY,
+            tenant_id INT NOT NULL,
+            left_id INT NOT NULL,
+            right_id INT NOT NULL,
+            FOREIGN KEY (tenant_id, left_id) REFERENCES lefts(tenant_id, id),
+            FOREIGN KEY (tenant_id, right_id) REFERENCES rights(tenant_id, id)
+        );
+        """
+    )
+    config = Config(
+        seed=0,
+        tables={
+            "lefts": TableConfig(
+                rows=2,
+                columns={
+                    "tenant_id": ColumnConfig(generator="sequence", params={"start": 1}),
+                    "id": ColumnConfig(generator="sequence", params={"start": 10}),
+                },
+            ),
+            "rights": TableConfig(
+                rows=1,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [2]}),
+                    "id": ColumnConfig(generator="sequence", params={"start": 20}),
+                },
+            ),
+            "links": TableConfig(
+                rows=1,
+                columns={"id": ColumnConfig(generator="sequence", params={"start": 30})},
+            ),
+        },
+    )
+
+    dataset = generate_dataset(spec, config)
+
+    assert dataset.quarantine == {}
+    assert dataset.tables["links"] == [{"id": 30, "tenant_id": 2, "left_id": 11, "right_id": 20}]
+
+
+def test_required_fk_with_quarantined_empty_parent_quarantines_the_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = parse_ddl(
+        """
+        CREATE TABLE parent (id SERIAL PRIMARY KEY, value INT NOT NULL);
+        CREATE TABLE child (
+            id SERIAL PRIMARY KEY,
+            parent_id INT NOT NULL REFERENCES parent(id)
+        );
+        """
+    )
+
+    def quarantine_parent(batch: list[dict[str, Any]]) -> None:
+        if batch and "value" in batch[0]:
+            batch[0]["value"] = None
+
+    monkeypatch.setattr(engine, "complete_batch", quarantine_parent)
+
+    dataset = generate_dataset(
+        spec,
+        Config(tables={"parent": TableConfig(rows=1), "child": TableConfig(rows=1)}),
+    )
+
+    assert dataset.tables["parent"] == []
+    assert dataset.tables["child"] == []
+    assert len(dataset.quarantine["parent"]) == 1
+    assert len(dataset.quarantine["child"]) == 1
+
+
+def test_match_full_root_does_not_become_partially_null_via_shared_fk() -> None:
+    spec = parse_ddl(
+        """
+        CREATE TABLE parent (
+            tenant_id INT NOT NULL,
+            id INT NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE offers (
+            id INT PRIMARY KEY,
+            tenant_id INT,
+            parent_id INT,
+            previous_id INT,
+            UNIQUE (tenant_id, id),
+            FOREIGN KEY (tenant_id, parent_id) REFERENCES parent(tenant_id, id),
+            FOREIGN KEY (tenant_id, previous_id)
+                REFERENCES offers(tenant_id, id) MATCH FULL
+        );
+        """
+    )
+    dataset = generate_dataset(
+        spec,
+        Config(
+            tables={
+                "parent": TableConfig(
+                    rows=1,
+                    columns={
+                        "tenant_id": ColumnConfig(generator="sequence", params={"start": 1}),
+                        "id": ColumnConfig(generator="sequence", params={"start": 10}),
+                    },
+                ),
+                "offers": TableConfig(
+                    rows=1,
+                    columns={"id": ColumnConfig(generator="sequence", params={"start": 30})},
+                ),
+            },
+            hierarchy={"offers.previous_id": HierarchyConfig(branching=2, max_depth=1)},
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    row = dataset.tables["offers"][0]
+    assert row["tenant_id"] is None
+    assert row["parent_id"] is None
+    assert row["previous_id"] is None
 
 
 def test_qualified_self_reference_uses_the_canonical_table_name() -> None:

@@ -548,6 +548,41 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- PR #45 — refactor de la selección de FKs compuestas compartidas en un
+  `TableAssigner` privado (`generation/_table_assignment.py`), sin tocar la IR
+  ni los generadores:
+  - coordina por componentes conexas, conserva discriminadores compartidos y
+    decide una asignación conjunta válida antes de generar filas;
+  - permite máscaras y `null_ratio` independientes para FKs anulables bajo
+    `MATCH SIMPLE`, contando cada cuota solo en sus filas no nulas, con una
+    asignación global de grupos que conserva capacidad futura;
+  - incorpora la capacidad de padres libres de `unique_subset` y el soporte de
+    las relaciones obligatorias al rango de cada grupo, junto con las cotas
+    agregadas de todas las cuotas; el solver global agrupa filas por firma de
+    máscara activa y grupos candidatos y resuelve sus capacidades con un DP
+    iterativo que aplica cotas residuales, demanda mínima y capacidad futura
+    durante la construcción, sin enumerar primero las composiciones débiles;
+  - muestrea puentes uniformemente sin reemplazo por índice plano, sin
+    materializar el producto cartesiano, y preserva cuotas de ambos lados con
+    un b-matching exacto de grados acotados realizado por Havel–Hakimi, cuyo
+    trabajo depende de padres y pares solicitados, no de `L×R`;
+  - mantiene semillas jerárquicas, determinismo por `batch_size`, RI, unicidad y
+    errores accionables para topologías o cuotas infactibles;
+  - añade regresiones para los tres bloqueantes de la revisión, componentes de
+    cuotas independientes, nulabilidad, cuotas a ambos lados del puente,
+    uniformidad 2×2, un oráculo exhaustivo completo para `L,R≤3`, regresiones
+    de 20/100/1.000 y 1.200/10.000 filas y cotas estructurales privadas
+    lineales.
+
+- Issue #44: las autorreferencias compuestas multi-tenant se generan por niveles
+  usando `nullable_columns` bajo `MATCH SIMPLE`/`MATCH FULL`; las FKs no
+  autorreferentes se asignan antes de la jerarquía, comparten restricciones de
+  tenant sin sobrescrituras incompatibles, descartan candidatos sin soporte en
+  otras FKs obligatorias y producen errores accionables cuando falta un padre
+  obligatorio compatible. Una tabla hija también puede entrar en cuarentena
+  cuando su padre quedó completamente apartado. Se añaden fixtures UUID y
+  regresiones de niveles, cuarentena y determinismo por `batch_size`.
+
 - Tercera revisión de PR #40: `numeric_range` mantiene en `Decimal` las cotas y
   la rejilla de `NUMERIC(p, s)` hasta la cuantización final, evitando el
   subdesbordamiento de `scale_step` en escalas grandes y preservando el contexto

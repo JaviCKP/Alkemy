@@ -14,14 +14,8 @@ from typing import Any, TypeAlias
 
 from synthdb.config.models import Config
 from synthdb.constraints.check_interp import interpret_checks
+from synthdb.generation._table_assignment import AssignmentRelation, TableAssigner
 from synthdb.generation.context import RowContext, build_column_order, mapping_resolver
-from synthdb.generation.fk import (
-    NullRatioSelector,
-    UniformSelector,
-    UniqueSubsetSelector,
-    ZipfSelector,
-    build_quota_assignment,
-)
 from synthdb.generation.generators import Generator, resolve
 from synthdb.generation.keystore import KeyStore
 from synthdb.generation.numeric_bounds import (
@@ -143,6 +137,43 @@ class Dataset:
 
 FkKey: TypeAlias = tuple[str, ...]
 RandomState: TypeAlias = tuple[Any, ...]
+
+
+@dataclass
+class _SelectionWork:
+    """Instrumentación **privada de tests** del trabajo de selección de FKs.
+
+    No es API pública ni influye en la salida: cuenta las dos rutas que deben
+    escalar de forma lineal (revisión PR #45) para que las regresiones de
+    complejidad verifiquen una cota estructural sin depender de un umbral
+    temporal frágil. Se reinicia al comenzar cada `generate_dataset`.
+
+    - ``filter_scans``: candidatos examinados al resolver discriminadores
+      compartidos; las proyecciones se construyen una vez por tabla.
+    - ``bridge_pairs_examined``: pares de padres examinados por el asignador
+      conjunto del puente; no se materializa el producto cartesiano completo.
+    - ``bridge_quota_work``: unidades de construcción/resolución del
+      b-matching con cuotas; incluye grados de padres y pares seleccionados.
+    - ``global_solver_work`` / ``global_solver_states``: filas, contribuciones
+      y alternativas inspeccionadas por el DP de firmas compartidas.
+    """
+
+    filter_scans: int = 0
+    bridge_pairs_examined: int = 0
+    bridge_quota_work: int = 0
+    global_solver_work: int = 0
+    global_solver_states: int = 0
+
+    def reset(self) -> None:
+        """Pone los contadores a cero al inicio de una generación."""
+        self.filter_scans = 0
+        self.bridge_pairs_examined = 0
+        self.bridge_quota_work = 0
+        self.global_solver_work = 0
+        self.global_solver_states = 0
+
+
+_SELECTION_WORK = _SelectionWork()
 
 
 def complete_batch(batch: list[dict[str, Any]]) -> None:
@@ -433,6 +464,29 @@ def _row_count(table: str, config: Config) -> int:
     return tconf.rows if tconf is not None and tconf.rows is not None else config.defaults.rows
 
 
+def _quarantined_empty_parent_relations(
+    compiled: _CompiledTable, config: Config, dataset: Dataset
+) -> frozenset[FkKey]:
+    """Marca FKs obligatorias cuyo padre quedó completamente en cuarentena.
+
+    Una ausencia causada por una cuarentena previa no es una incompatibilidad
+    de selección de la fila actual: con ``on_error=quarantine`` la fila actual
+    también debe poder apartarse para que el cierre RI continúe. Si hay padres
+    aceptados, o si el modo es ``abort``, la selección sigue siendo estricta y
+    un conjunto incompatible produce ``GenerationError``.
+    """
+    if config.output.on_error != "quarantine":
+        return frozenset()
+    unresolved: set[FkKey] = set()
+    for fk in compiled.spec.foreign_keys:
+        if _nullable_fk_columns(fk):
+            continue
+        parent_name = _CURRENT_TABLE_INDEX[fk.ref_table].name
+        if not dataset.tables[parent_name] and dataset.quarantine.get(parent_name):
+            unresolved.add(tuple(fk.columns))
+    return frozenset(unresolved)
+
+
 def _generate_table(
     compiled: _CompiledTable,
     config: Config,
@@ -444,14 +498,16 @@ def _generate_table(
     defer_validation: bool = False,
 ) -> None:
     total = _row_count(compiled.spec.name, config)
-    assignments, rng_states = _prepare_fk_assignments(
+    unresolved_relations = _quarantined_empty_parent_relations(compiled, config, dataset)
+    assignments, rng_states, assignment_values = _prepare_fk_assignments(
         compiled,
         total,
         config,
         dataset,
-        store,
         deferred_relation=deferred_relation,
         deferred_null_columns=deferred_null_columns,
+        allow_missing_parents=defer_validation,
+        unresolved_relations=unresolved_relations,
     )
     table_seed = seed_for_table(config.seed, compiled.spec.name)
     batch_size = config.output.batch_size
@@ -461,7 +517,17 @@ def _generate_table(
             rng = rng_for_row(table_seed, row_number)
             rng.setstate(rng_states[row_number])
             row, parents, states = _generate_row(
-                compiled, row_number, rng, assignments[row_number], config
+                compiled,
+                row_number,
+                rng,
+                assignments[row_number],
+                config,
+                initial_row=assignment_values[row_number],
+                null_columns_by_fk=(
+                    {deferred_relation: deferred_null_columns} if deferred_relation else {}
+                ),
+                allow_unresolved=defer_validation,
+                unresolved_fks=unresolved_relations,
             )
             batch.append(row)
             dataset._parents.setdefault(compiled.spec.name, {})[id(row)] = parents
@@ -476,70 +542,113 @@ def _prepare_fk_assignments(
     total: int,
     config: Config,
     dataset: Dataset,
-    store: KeyStore,
     *,
     deferred_relation: FkKey,
     deferred_null_columns: frozenset[str],
-) -> tuple[list[dict[FkKey, int | None]], list[RandomState]]:
-    assignments: list[dict[FkKey, int | None]] = [{} for _ in range(total)]
+    allow_missing_parents: bool = False,
+    unresolved_relations: frozenset[FkKey] = frozenset(),
+) -> tuple[
+    list[dict[FkKey, int | None]],
+    list[RandomState],
+    list[dict[str, Any]],
+]:
     table_seed = seed_for_table(config.seed, compiled.spec.name)
     row_rngs = [rng_for_row(table_seed, index) for index in range(total)]
-    selectors: dict[FkKey, Any] = {}
-    quotas: dict[FkKey, list[int]] = {}
+    assigner = _table_assigner(
+        compiled,
+        total,
+        config,
+        dataset,
+        row_rngs,
+        deferred_relation=deferred_relation,
+        deferred_null_columns=deferred_null_columns,
+        allow_missing_parents=allow_missing_parents,
+        unresolved_relations=unresolved_relations,
+    )
+    assignments, rng_states = assigner.assign_all()
+    return assignments, rng_states, assigner.local_values_by_row
 
+
+def _table_assigner(
+    compiled: _CompiledTable,
+    total: int,
+    config: Config,
+    dataset: Dataset,
+    row_rngs: list[Random],
+    *,
+    deferred_relation: FkKey,
+    deferred_null_columns: frozenset[str] = frozenset(),
+    allow_missing_parents: bool = False,
+    unresolved_relations: frozenset[FkKey],
+) -> TableAssigner:
+    """Construye el asignador privado con el contexto canónico de la tabla."""
+    relations: list[AssignmentRelation] = []
     for fk in compiled.spec.foreign_keys:
         key = tuple(fk.columns)
         if key == deferred_relation:
             continue
         parent_name = _CURRENT_TABLE_INDEX[fk.ref_table].name
-        parent_count = store.count(parent_name)
-        if parent_count == 0:
-            continue
-        params = _fk_params(compiled, fk, config)
-        strategy = str(params.get("strategy", "uniform"))
-        null_ratio = float(params.get("null_ratio", 0.0))
-        if strategy == "quota":
-            non_null = [i for i, rng in enumerate(row_rngs) if rng.random() >= null_ratio]
-            quota_rng = Random(seed_for_table(config.seed, f"{compiled.spec.name}:{','.join(key)}"))
-            quota = build_quota_assignment(
-                quota_rng,
-                parent_count,
-                len(non_null),
-                int(params["min"]),
-                int(params["max"]),
+        relations.append(
+            AssignmentRelation(
+                fk=fk,
+                parent_rows=dataset.tables[parent_name],
+                strategy=str(
+                    (params := _fk_params(compiled, fk, config)).get("strategy", "uniform")
+                ),
+                params=params,
+                nullable_columns=_nullable_fk_columns(fk),
+                unresolved=key in unresolved_relations,
+                allow_missing_parents=allow_missing_parents,
             )
-            quotas[key] = [-1] * total
-            for row_index, parent_index in zip(non_null, quota, strict=True):
-                quotas[key][row_index] = parent_index
-            continue
-        selector: Any
-        if strategy == "zipf":
-            selector = ZipfSelector(parent_count, float(params.get("s", 1.2)))
-        elif strategy == "unique_subset":
-            selector = UniqueSubsetSelector(parent_count, total, compiled.spec.name)
-        else:
-            selector = UniformSelector(parent_count)
-        if null_ratio:
-            selector = NullRatioSelector(selector, null_ratio)
-        selectors[key] = selector
+        )
+    return TableAssigner(
+        table_name=compiled.spec.name,
+        table_kind=compiled.spec.kind,
+        relations=relations,
+        total=total,
+        row_rngs=row_rngs,
+        seed=config.seed,
+        deferred_relation=deferred_relation,
+        deferred_null_columns=deferred_null_columns,
+        error_factory=GenerationError,
+        work=_SELECTION_WORK,
+    )
 
-    seen_bridge_pairs: set[tuple[Any, ...]] = set()
-    for row_index, rng in enumerate(row_rngs):
-        for fk in compiled.spec.foreign_keys:
-            key = tuple(fk.columns)
-            if key == deferred_relation:
-                assignments[row_index][key] = None
-                continue
-            if key in quotas:
-                selected = quotas[key][row_index]
-                assignments[row_index][key] = None if selected < 0 else selected
-            elif key in selectors:
-                assignments[row_index][key] = selectors[key].pick(rng)
-        if compiled.spec.kind == "bridge":
-            _deduplicate_bridge_pair(
-                compiled.spec, assignments[row_index], rng, store, seen_bridge_pairs
-            )
-    return assignments, [rng.getstate() for rng in row_rngs]
+
+def _ordered_foreign_keys(
+    compiled: _CompiledTable, deferred_relation: FkKey
+) -> list[RelationshipSpec]:
+    """Ordena FKs compartidas poniendo primero las que no pueden ser NULL."""
+    foreign_keys = [
+        fk for fk in compiled.spec.foreign_keys if tuple(fk.columns) != deferred_relation
+    ]
+    has_shared_columns = bool(deferred_relation) or any(
+        set(fk.columns).intersection(other.columns)
+        for index, fk in enumerate(foreign_keys)
+        for other in foreign_keys[index + 1 :]
+    )
+    if not has_shared_columns:
+        return foreign_keys
+    return [
+        fk
+        for _, fk in sorted(
+            enumerate(foreign_keys),
+            key=lambda item: (
+                bool(_nullable_fk_columns(item[1])),
+                -len(item[1].columns),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _nullable_fk_columns(fk: RelationshipSpec) -> tuple[str, ...]:
+    """Devuelve las columnas que pueden anular una FK con su semántica MATCH."""
+    if not fk.nullable_columns:
+        return ()
+    if fk.match_full and len(fk.nullable_columns) != len(fk.columns):
+        return ()
+    return tuple(fk.nullable_columns)
 
 
 def _fk_params(compiled: _CompiledTable, fk: RelationshipSpec, config: Config) -> dict[str, Any]:
@@ -554,75 +663,48 @@ def _fk_params(compiled: _CompiledTable, fk: RelationshipSpec, config: Config) -
     return {"strategy": "uniform"}
 
 
-def _deduplicate_bridge_pair(
-    table: TableSpec,
-    assignment: dict[FkKey, int | None],
-    rng: Random,
-    store: KeyStore,
-    seen: set[tuple[Any, ...]],
-) -> None:
-    if len(table.foreign_keys) < 2:
-        return
-    first, second = table.foreign_keys[:2]
-    first_key, second_key = tuple(first.columns), tuple(second.columns)
-    left, right = assignment.get(first_key), assignment.get(second_key)
-    if left is None or right is None:
-        return
-    pair = (left, right)
-    if pair not in seen:
-        seen.add(pair)
-        return
-    parent_name = _CURRENT_TABLE_INDEX[second.ref_table].name
-    candidates = [index for index in range(store.count(parent_name)) if (left, index) not in seen]
-    if not candidates:
-        raise GenerationError(
-            f"tabla puente {table.name}: no quedan pares FK únicos para las "
-            "filas solicitadas; reduce la cardinalidad o aumenta las tablas padre."
-        )
-    right = candidates[rng.randrange(len(candidates))]
-    assignment[second_key] = right
-    seen.add((left, right))
-
-
 def _generate_row(
     compiled: _CompiledTable,
     row_number: int,
     rng: Random,
     assignments: dict[FkKey, int | None],
     config: Config,
+    *,
+    initial_row: dict[str, Any] | None = None,
+    initial_parents: dict[str, dict[str, Any] | None] | None = None,
+    null_columns_by_fk: dict[FkKey, frozenset[str]] | None = None,
+    allow_unresolved: bool = False,
+    unresolved_fks: frozenset[FkKey] = frozenset(),
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any] | None], dict[str, RandomState]]:
-    row: dict[str, Any] = {}
-    parents: dict[str, dict[str, Any] | None] = {}
+    row = dict(initial_row or {})
+    parents = dict(initial_parents or {})
     states: dict[str, RandomState] = {}
 
     # The database would assign SERIAL values. The in-memory MVP mirrors the
     # deterministic values PostgreSQL would produce so they can enter KeyStore.
     for column in compiled.spec.columns:
         if column.type.autoincrement:
-            row[column.name] = row_number + 1
+            row.setdefault(column.name, row_number + 1)
 
     dataset = _CURRENT_DATASET
     if dataset is None:
         raise AssertionError("dataset context not installed")
-    for fk in compiled.spec.foreign_keys:
-        key = tuple(fk.columns)
-        parent_index = assignments.get(key)
-        if parent_index is None:
-            for local_column in fk.columns:
-                row.setdefault(local_column, None)
-                parents[local_column] = None
-            continue
-        parent_table = _CURRENT_TABLE_INDEX[fk.ref_table].name
-        parent_row = dataset.tables[parent_table][parent_index]
-        for local_column, ref_column in zip(fk.columns, fk.ref_columns, strict=True):
-            row[local_column] = parent_row[ref_column]
-            parents[local_column] = parent_row
+    _apply_fk_assignments(
+        compiled,
+        assignments,
+        row,
+        parents,
+        dataset,
+        null_columns_by_fk=null_columns_by_fk or {},
+        allow_unresolved=allow_unresolved,
+        unresolved_fks=unresolved_fks,
+    )
 
     for column_name in compiled.order:
         if column_name in row:
             continue
         item = compiled.columns[column_name]
-        if item.spec is None:
+        if item.spec is None or (item.generator is None and item.derivation is None):
             continue
         ctx = RowContext(
             rng=rng,
@@ -637,6 +719,59 @@ def _generate_row(
         row[column_name] = value
     _ensure_compound_unique(compiled, row, parents, states, rng, config)
     return row, parents, states
+
+
+def _apply_fk_assignments(
+    compiled: _CompiledTable,
+    assignments: dict[FkKey, int | None],
+    row: dict[str, Any],
+    parents: dict[str, dict[str, Any] | None],
+    dataset: Dataset,
+    *,
+    null_columns_by_fk: dict[FkKey, frozenset[str]],
+    allow_unresolved: bool,
+    unresolved_fks: frozenset[FkKey],
+) -> None:
+    """Escribe FKs sin sobrescribir silenciosamente valores locales compartidos."""
+    for fk in _ordered_foreign_keys(compiled, ()):
+        key = tuple(fk.columns)
+        parent_index = assignments.get(key)
+        if parent_index is None:
+            if key in null_columns_by_fk:
+                null_columns = null_columns_by_fk[key]
+            elif key in unresolved_fks or allow_unresolved:
+                null_columns = frozenset(fk.columns)
+            else:
+                null_columns = frozenset(_nullable_fk_columns(fk))
+            if (
+                fk.match_full
+                and not (key in unresolved_fks or allow_unresolved)
+                and any(row.get(local_column) is not None for local_column in fk.columns)
+            ):
+                raise GenerationError(
+                    f"tabla {compiled.spec.name}, FK ({', '.join(fk.columns)}): "
+                    "MATCH FULL no permite anular solo una parte de la relación."
+                )
+            for local_column in null_columns:
+                if row.get(local_column) is None:
+                    row[local_column] = None
+                    parents[local_column] = None
+            continue
+        parent_table = _CURRENT_TABLE_INDEX[fk.ref_table].name
+        parent_row = dataset.tables[parent_table][parent_index]
+        for local_column, ref_column in zip(fk.columns, fk.ref_columns, strict=True):
+            value = parent_row[ref_column]
+            if local_column in row and row[local_column] is not None:
+                if row[local_column] != value:
+                    raise GenerationError(
+                        f"tabla {compiled.spec.name}, FK ({', '.join(fk.columns)}): "
+                        f"la columna compartida '{local_column}' ya vale "
+                        f"{row[local_column]!r}, pero el padre seleccionado exige {value!r}. "
+                        "Revisa las relaciones que comparten esa columna."
+                    )
+            else:
+                row[local_column] = value
+            parents[local_column] = parent_row
 
 
 _CURRENT_DATASET: Dataset | None = None
@@ -817,61 +952,101 @@ def _generate_leveled_table(
     store: KeyStore,
 ) -> None:
     total = _row_count(compiled.spec.name, config)
-    hierarchy_key = f"{compiled.spec.name}.{phase.self_fk_columns[0]}"
-    hierarchy = config.hierarchy.get(hierarchy_key)
+    hierarchy = next(
+        (
+            config.hierarchy.get(f"{compiled.spec.name}.{column}")
+            for column in phase.self_fk_columns
+            if config.hierarchy.get(f"{compiled.spec.name}.{column}") is not None
+        ),
+        None,
+    )
     branching = hierarchy.branching if hierarchy is not None else 5
     max_depth = hierarchy.max_depth if hierarchy is not None else max(total, 1)
     levels = _level_numbers(total, branching, max_depth)
     dataset.levels[compiled.spec.name] = []
     table_seed = seed_for_table(config.seed, compiled.spec.name)
+    row_rngs = [rng_for_row(table_seed, row_number) for row_number in range(total)]
     rows: list[dict[str, Any]] = []
     indices_by_level: dict[int, list[int]] = {}
     self_fk = _self_fk(compiled.spec, phase.self_fk_columns, _CURRENT_TABLE_INDEX)
+    self_fk_key = tuple(phase.self_fk_columns)
+    unresolved_relations = _quarantined_empty_parent_relations(compiled, config, dataset)
+    assigner = _table_assigner(
+        compiled,
+        total,
+        config,
+        dataset,
+        row_rngs,
+        deferred_relation=self_fk_key,
+        deferred_null_columns=(
+            frozenset(_nullable_fk_columns(self_fk))
+            if not phase.roots_point_to_self
+            else frozenset()
+        ),
+        unresolved_relations=unresolved_relations,
+    )
+    assigner.prepare_for_rows()
     for start in range(0, total, config.output.batch_size):
         batch: list[dict[str, Any]] = []
         for row_number in range(start, min(total, start + config.output.batch_size)):
-            rng = rng_for_row(table_seed, row_number)
-            row: dict[str, Any] = {}
-            for column in compiled.spec.columns:
-                if column.type.autoincrement:
-                    row[column.name] = row_number + 1
+            rng = row_rngs[row_number]
             level = levels[row_number]
             parent: dict[str, Any] | None
+            initial_row: dict[str, Any] = {}
+            initial_parents: dict[str, dict[str, Any] | None]
             if level == 0:
-                if phase.roots_point_to_self:
-                    for local, ref in zip(
-                        phase.self_fk_columns,
-                        self_fk.ref_columns,
-                        strict=True,
-                    ):
-                        row[local] = row[ref]
+                parent = None
+                initial_parents = dict.fromkeys(phase.self_fk_columns, None)
+                if not phase.roots_point_to_self:
+                    for local in _nullable_fk_columns(self_fk):
+                        initial_row[local] = None
                 else:
                     for local in phase.self_fk_columns:
-                        row[local] = None
-                parent = row if phase.roots_point_to_self else None
+                        item = compiled.columns[local]
+                        if item.generator is None and item.derivation is None:
+                            initial_row[local] = None
             else:
                 previous = indices_by_level[level - 1]
                 parent = rows[previous[rng.randrange(len(previous))]]
                 for local, ref in zip(self_fk.columns, self_fk.ref_columns, strict=True):
-                    row[local] = parent[ref]
-            parents: dict[str, dict[str, Any] | None] = dict.fromkeys(phase.self_fk_columns, parent)
-            states: dict[str, RandomState] = {}
-            for column_name in compiled.order:
-                if column_name in row:
-                    continue
-                item = compiled.columns[column_name]
-                if item.spec is None:
-                    continue
-                ctx = RowContext(
-                    rng=rng,
-                    column=item.column,
-                    table=compiled.spec.name,
-                    row=row,
-                    refs=config.refs,
-                    resolve_parent=mapping_resolver(parents),
-                )
-                states[column_name] = rng.getstate()
-                row[column_name] = _generate_value(item, ctx)
+                    initial_row[local] = parent[ref]
+                initial_parents = dict.fromkeys(phase.self_fk_columns, parent)
+            assignments = assigner.assign_row(row_number, rng, initial_row)
+            for local, value in assigner.local_values_by_row[row_number].items():
+                initial_row.setdefault(local, value)
+            row, parents, states = _generate_row(
+                compiled,
+                row_number,
+                rng,
+                assignments,
+                config,
+                initial_row=initial_row,
+                initial_parents=initial_parents,
+                unresolved_fks=unresolved_relations,
+            )
+            if level == 0 and phase.roots_point_to_self:
+                for local, ref in zip(
+                    phase.self_fk_columns,
+                    self_fk.ref_columns,
+                    strict=True,
+                ):
+                    if ref not in row:
+                        raise GenerationError(
+                            f"tabla {compiled.spec.name}, autorreferencia "
+                            f"({', '.join(phase.self_fk_columns)}): no se pudo generar "
+                            f"la columna referenciada '{ref}' antes de construir la raíz. "
+                            "Asigna un generador a la clave primaria y al discriminador."
+                        )
+                    value = row[ref]
+                    if local in row and row[local] is not None and row[local] != value:
+                        raise GenerationError(
+                            f"tabla {compiled.spec.name}, autorreferencia "
+                            f"({', '.join(phase.self_fk_columns)}): la columna compartida "
+                            f"'{local}' ya vale {row[local]!r}, pero la raíz necesita "
+                            f"{value!r}. Revisa las FKs que fijan ese valor."
+                        )
+                    row[local] = value
+                    parents[local] = row
             batch.append(row)
             rows.append(row)
             indices_by_level.setdefault(level, []).append(row_number)
@@ -942,6 +1117,10 @@ def _fill_missing_foreign_keys(
                 )
             ]
             if not candidates:
+                nullable_columns = set(_nullable_fk_columns(fk))
+                requested_columns = set(columns) if columns else nullable_columns
+                if nullable_columns and requested_columns <= nullable_columns:
+                    continue
                 raise GenerationError(
                     f"tabla {table_name}: no hay fila padre compatible para completar "
                     f"la FK ({', '.join(fk.columns)})."
@@ -1131,3 +1310,4 @@ def _install_run_context(spec: SchemaSpec, dataset: Dataset) -> None:
     _CURRENT_TABLE_INDEX = index_tables(spec)
     _CURRENT_UNIQUE = {}
     _CURRENT_COMPOSITE = {}
+    _SELECTION_WORK.reset()
