@@ -14,7 +14,11 @@ from typing import Any, TypeAlias
 
 from synthdb.config.models import Config
 from synthdb.constraints.check_interp import interpret_checks
-from synthdb.generation._table_assignment import AssignmentRelation, TableAssigner
+from synthdb.generation._table_assignment import (
+    AssignmentRelation,
+    CompoundUniqueConstraint,
+    TableAssigner,
+)
 from synthdb.generation.context import RowContext, build_column_order, mapping_resolver
 from synthdb.generation.generators import Generator, resolve
 from synthdb.generation.keystore import KeyStore
@@ -154,6 +158,8 @@ class _SelectionWork:
       conjunto del puente; no se materializa el producto cartesiano completo.
     - ``bridge_quota_work``: unidades de construcción/resolución del
       b-matching con cuotas; incluye grados de padres y pares seleccionados.
+    - ``compound_pairs_examined``: pares seleccionados por contratos de
+      UNIQUE compuesta en tablas regulares; mide solo el trabajo solicitado.
     - ``global_solver_work`` / ``global_solver_states``: filas, contribuciones
       y alternativas inspeccionadas por el DP de firmas compartidas.
     """
@@ -161,6 +167,7 @@ class _SelectionWork:
     filter_scans: int = 0
     bridge_pairs_examined: int = 0
     bridge_quota_work: int = 0
+    compound_pairs_examined: int = 0
     global_solver_work: int = 0
     global_solver_states: int = 0
 
@@ -169,6 +176,7 @@ class _SelectionWork:
         self.filter_scans = 0
         self.bridge_pairs_examined = 0
         self.bridge_quota_work = 0
+        self.compound_pairs_examined = 0
         self.global_solver_work = 0
         self.global_solver_states = 0
 
@@ -601,6 +609,7 @@ def _table_assigner(
                 allow_missing_parents=allow_missing_parents,
             )
         )
+    compound_unique_constraints = _compound_unique_constraints(compiled.spec, deferred_relation)
     return TableAssigner(
         table_name=compiled.spec.name,
         table_kind=compiled.spec.kind,
@@ -612,7 +621,43 @@ def _table_assigner(
         deferred_null_columns=deferred_null_columns,
         error_factory=GenerationError,
         work=_SELECTION_WORK,
+        compound_unique_constraints=compound_unique_constraints,
     )
+
+
+def _compound_unique_constraints(
+    spec: TableSpec, deferred_relation: FkKey
+) -> tuple[CompoundUniqueConstraint, ...]:
+    """Derive private UNIQUE-to-FK contracts from the frozen schema IR.
+
+    A restriction is managed jointly only when every one of its columns belongs
+    to at least one FK and at least two distinct FKs contribute a column. A
+    normal regenerable attribute therefore cannot accidentally turn on this
+    route, while a shared discriminator remains part of the participating
+    relations.
+    """
+    groups: list[tuple[str, ...]] = []
+    if spec.primary_key:
+        groups.append(tuple(spec.primary_key))
+    groups.extend(tuple(unique) for unique in spec.uniques)
+    fk_columns = {column for fk in spec.foreign_keys for column in fk.columns}
+    contracts: list[CompoundUniqueConstraint] = []
+    seen: set[tuple[str, ...]] = set()
+    for group in groups:
+        if len(group) < 2 or group in seen or not set(group).issubset(fk_columns):
+            continue
+        seen.add(group)
+        relations = tuple(
+            tuple(fk.columns) for fk in spec.foreign_keys if set(fk.columns).intersection(group)
+        )
+        if len(relations) < 2:
+            continue
+        if deferred_relation and deferred_relation in relations:
+            # A deferred FK is filled only after the table has been generated;
+            # it cannot participate in a pre-generation no-replacement plan.
+            continue
+        contracts.append(CompoundUniqueConstraint(columns=group, relations=relations))
+    return tuple(contracts)
 
 
 def _ordered_foreign_keys(

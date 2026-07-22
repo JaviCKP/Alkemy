@@ -315,6 +315,435 @@ def test_shared_fk_selection_scales_linearly() -> None:
     assert scans_big <= 8 * scans_small
 
 
+# --- Issue #47: UNIQUE compuesta de FKs en tabla regular ---------------------
+
+_REGULAR_COMPOUND_UNIQUE_SCHEMA = """
+CREATE TABLE a (id SERIAL PRIMARY KEY);
+CREATE TABLE b (id SERIAL PRIMARY KEY);
+CREATE TABLE x (
+    id UUID PRIMARY KEY,
+    a_id INT NOT NULL REFERENCES a(id),
+    b_id INT NOT NULL REFERENCES b(id),
+    note TEXT,
+    flag BOOLEAN,
+    UNIQUE (a_id, b_id)
+);
+"""
+
+
+@pytest.mark.parametrize("seed", range(20))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_regular_compound_unique_fks_assign_without_replacement(seed: int, batch_size: int) -> None:
+    """A regular table must coordinate FKs covered by a compound UNIQUE."""
+    dataset = generate_dataset(
+        parse_ddl(_REGULAR_COMPOUND_UNIQUE_SCHEMA),
+        Config(
+            seed=seed,
+            tables={
+                "a": TableConfig(rows=2),
+                "b": TableConfig(rows=2),
+                "x": TableConfig(rows=4),
+            },
+            output=OutputConfig(batch_size=batch_size),
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["x"]
+    assert len(rows) == 4
+    assert {(row["a_id"], row["b_id"]) for row in rows} == {
+        (1, 1),
+        (1, 2),
+        (2, 1),
+        (2, 2),
+    }
+    a_ids = {row["id"] for row in dataset.tables["a"]}
+    b_ids = {row["id"] for row in dataset.tables["b"]}
+    assert all(row["a_id"] in a_ids and row["b_id"] in b_ids for row in rows)
+
+
+def test_regular_composite_primary_key_of_foreign_keys_uses_same_contract() -> None:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE b (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        a_id INT NOT NULL REFERENCES a(id),
+        b_id INT NOT NULL REFERENCES b(id),
+        note TEXT,
+        flag BOOLEAN,
+        extra INT,
+        PRIMARY KEY (a_id, b_id)
+    );
+    """
+    spec = parse_ddl(schema)
+    dataset = generate_dataset(
+        spec,
+        Config(
+            seed=5,
+            tables={"a": TableConfig(rows=2), "b": TableConfig(rows=2), "x": TableConfig(rows=4)},
+        ),
+    )
+
+    assert next(table for table in spec.tables if table.name == "x").kind == "regular"
+    assert dataset.quarantine == {}
+    assert len({(row["a_id"], row["b_id"]) for row in dataset.tables["x"]}) == 4
+
+
+def _regular_compound_config(
+    *, rows: int, seed: int = 0, batch_size: int = 5000, fk: dict[str, object] | None = None
+) -> Config:
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2),
+            "b": TableConfig(rows=2),
+            "x": TableConfig(rows=rows, fk=fk or {}),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+def _regular_compound_oracle(parent_rows: int, requested: int) -> list[tuple[int, int]]:
+    """Enumerate the tiny feasible edge set independently in the test."""
+    candidates = list(product(range(1, parent_rows + 1), repeat=2))
+    return candidates[:requested] if requested <= len(candidates) else []
+
+
+@pytest.mark.parametrize("requested", [3, 4, 5])
+def test_regular_compound_unique_matches_small_exhaustive_oracle(requested: int) -> None:
+    feasible = _regular_compound_oracle(2, requested)
+    for seed in range(5):
+        if not feasible:
+            with pytest.raises(GenerationError) as exc_info:
+                generate_dataset(
+                    parse_ddl(_REGULAR_COMPOUND_UNIQUE_SCHEMA),
+                    _regular_compound_config(rows=requested, seed=seed),
+                )
+            message = str(exc_info.value)
+            assert "tabla x" in message
+            assert "a_id, b_id" in message
+            assert str(requested) in message
+            assert "4 combinaciones compatibles" in message
+            continue
+
+        dataset = generate_dataset(
+            parse_ddl(_REGULAR_COMPOUND_UNIQUE_SCHEMA),
+            _regular_compound_config(rows=requested, seed=seed),
+        )
+        pairs = {(row["a_id"], row["b_id"]) for row in dataset.tables["x"]}
+        assert len(pairs) == requested
+        assert pairs.issubset(set(_regular_compound_oracle(2, 4)))
+        assert dataset.quarantine == {}
+
+
+_REGULAR_MULTITENANT_COMPOUND_SCHEMA = """
+CREATE TABLE lefts (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE rights (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE regular_links (
+    id UUID PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    left_id INT NOT NULL,
+    right_id INT NOT NULL,
+    note TEXT,
+    flag BOOLEAN,
+    UNIQUE (tenant_id, left_id, right_id),
+    FOREIGN KEY (tenant_id, left_id) REFERENCES lefts(tenant_id, id),
+    FOREIGN KEY (tenant_id, right_id) REFERENCES rights(tenant_id, id)
+);
+"""
+
+
+@pytest.mark.parametrize("seed", range(20))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_regular_multitenant_compound_unique_keeps_shared_discriminator(
+    seed: int, batch_size: int
+) -> None:
+    spec = parse_ddl(_REGULAR_MULTITENANT_COMPOUND_SCHEMA)
+    dataset = generate_dataset(
+        spec,
+        Config(
+            seed=seed,
+            tables={
+                "lefts": TableConfig(rows=4, columns={"tenant_id": _seq(1), "id": _seq(100)}),
+                "rights": TableConfig(rows=4, columns={"tenant_id": _seq(1), "id": _seq(200)}),
+                "regular_links": TableConfig(rows=4),
+            },
+            output=OutputConfig(batch_size=batch_size),
+        ),
+    )
+
+    assert next(table for table in spec.tables if table.name == "regular_links").kind == "regular"
+    assert dataset.quarantine == {}
+    rows = dataset.tables["regular_links"]
+    assert len(rows) == 4
+    assert len({(row["tenant_id"], row["left_id"], row["right_id"]) for row in rows}) == 4
+    left_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["lefts"]}
+    right_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["rights"]}
+    assert all(
+        (row["tenant_id"], row["left_id"]) in left_keys
+        and (row["tenant_id"], row["right_id"]) in right_keys
+        for row in rows
+    )
+
+
+def test_regular_compound_unique_can_coordinate_three_foreign_keys() -> None:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE b (id SERIAL PRIMARY KEY);
+    CREATE TABLE c (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        id UUID PRIMARY KEY,
+        a_id INT NOT NULL REFERENCES a(id),
+        b_id INT NOT NULL REFERENCES b(id),
+        c_id INT NOT NULL REFERENCES c(id),
+        note TEXT,
+        flag BOOLEAN,
+        UNIQUE (a_id, b_id, c_id)
+    );
+    """
+    for seed in range(5):
+        dataset = generate_dataset(
+            parse_ddl(schema),
+            Config(
+                seed=seed,
+                tables={
+                    "a": TableConfig(rows=2),
+                    "b": TableConfig(rows=2),
+                    "c": TableConfig(rows=2),
+                    "x": TableConfig(rows=8),
+                },
+                output=OutputConfig(batch_size=1),
+            ),
+        )
+        rows = dataset.tables["x"]
+        assert dataset.quarantine == {}
+        assert len({(row["a_id"], row["b_id"], row["c_id"]) for row in rows}) == 8
+
+
+def test_multiple_compound_unique_constraints_share_one_joint_assignment() -> None:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE b (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        id UUID PRIMARY KEY,
+        a_id INT NOT NULL REFERENCES a(id),
+        b_id INT NOT NULL REFERENCES b(id),
+        note TEXT,
+        flag BOOLEAN,
+        UNIQUE (a_id, b_id),
+        UNIQUE (b_id, a_id)
+    );
+    """
+    dataset = generate_dataset(
+        parse_ddl(schema),
+        Config(
+            seed=7,
+            tables={"a": TableConfig(rows=2), "b": TableConfig(rows=2), "x": TableConfig(rows=4)},
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    assert len({(row["a_id"], row["b_id"]) for row in dataset.tables["x"]}) == 4
+
+
+def test_overlapping_compound_unique_constraints_reject_before_invalid_rows() -> None:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE b (id SERIAL PRIMARY KEY);
+    CREATE TABLE c (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        id UUID PRIMARY KEY,
+        a_id INT NOT NULL REFERENCES a(id),
+        b_id INT NOT NULL REFERENCES b(id),
+        c_id INT NOT NULL REFERENCES c(id),
+        note TEXT,
+        flag BOOLEAN,
+        UNIQUE (a_id, b_id),
+        UNIQUE (a_id, c_id)
+    );
+    """
+    with pytest.raises(GenerationError, match="comparten una componente de FKs"):
+        generate_dataset(
+            parse_ddl(schema),
+            Config(
+                seed=13,
+                tables={
+                    "a": TableConfig(rows=2),
+                    "b": TableConfig(rows=2),
+                    "c": TableConfig(rows=2),
+                    "x": TableConfig(rows=2),
+                },
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("fk", "rows"),
+    [
+        (
+            {
+                "a_id": FkQuota(strategy="quota", min=1, max=1),
+                "b_id": FkQuota(strategy="quota", min=1, max=1),
+            },
+            2,
+        ),
+        (
+            {
+                "a_id": FkUniqueSubset(strategy="unique_subset"),
+                "b_id": FkUniqueSubset(strategy="unique_subset"),
+            },
+            2,
+        ),
+        (
+            {
+                "a_id": FkUniqueSubset(strategy="unique_subset"),
+                "b_id": FkQuota(strategy="quota", min=1, max=1),
+            },
+            2,
+        ),
+    ],
+)
+def test_regular_compound_unique_preserves_limited_fk_strategies(
+    fk: dict[str, object], rows: int
+) -> None:
+    dataset = generate_dataset(
+        parse_ddl(_REGULAR_COMPOUND_UNIQUE_SCHEMA),
+        _regular_compound_config(rows=rows, seed=11, batch_size=1, fk=fk),
+    )
+
+    assert dataset.quarantine == {}
+    assert len(dataset.tables["x"]) == rows
+    a_counts = Counter(row["a_id"] for row in dataset.tables["x"])
+    b_counts = Counter(row["b_id"] for row in dataset.tables["x"])
+    assert all(count <= 1 for count in a_counts.values())
+    assert all(count <= 1 for count in b_counts.values())
+
+
+def test_regular_compound_unique_does_not_activate_for_normal_attribute() -> None:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE b (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        id SERIAL PRIMARY KEY,
+        a_id INT NOT NULL REFERENCES a(id),
+        b_id INT NOT NULL REFERENCES b(id),
+        note INT NOT NULL,
+        UNIQUE (a_id, b_id, note)
+    );
+    """
+    dataset = generate_dataset(
+        parse_ddl(schema),
+        Config(
+            seed=3,
+            tables={
+                "a": TableConfig(rows=2),
+                "b": TableConfig(rows=2),
+                "x": TableConfig(rows=5, columns={"note": _seq(1)}),
+            },
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    assert len(dataset.tables["x"]) == 5
+    assert len({(row["a_id"], row["b_id"], row["note"]) for row in dataset.tables["x"]}) == 5
+
+
+def test_single_fk_unique_keeps_one_to_one_selection() -> None:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        id UUID PRIMARY KEY,
+        a_id INT NOT NULL UNIQUE REFERENCES a(id),
+        note TEXT,
+        flag BOOLEAN
+    );
+    """
+    for seed in range(5):
+        dataset = generate_dataset(
+            parse_ddl(schema),
+            Config(seed=seed, tables={"a": TableConfig(rows=2), "x": TableConfig(rows=2)}),
+        )
+        assert dataset.quarantine == {}
+        assert len({row["a_id"] for row in dataset.tables["x"]}) == 2
+
+
+def test_regular_compound_unique_respects_postgresql_null_distinct_semantics() -> None:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE b (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        id UUID PRIMARY KEY,
+        a_id INT REFERENCES a(id),
+        b_id INT NOT NULL REFERENCES b(id),
+        note TEXT,
+        flag BOOLEAN,
+        UNIQUE (a_id, b_id)
+    );
+    """
+    dataset = generate_dataset(
+        parse_ddl(schema),
+        Config(
+            seed=1,
+            tables={
+                "a": TableConfig(rows=2),
+                "b": TableConfig(rows=2),
+                "x": TableConfig(
+                    rows=4,
+                    fk={"a_id": FkUniform(strategy="uniform", null_ratio=0.5)},
+                ),
+            },
+            output=OutputConfig(batch_size=5000),
+        ),
+    )
+
+    rows = dataset.tables["x"]
+    non_null_pairs = [(row["a_id"], row["b_id"]) for row in rows if row["a_id"] is not None]
+    assert any(row["a_id"] is None for row in rows)
+    assert len(non_null_pairs) == len(set(non_null_pairs))
+    assert dataset.quarantine == {}
+
+
+def _regular_compound_probe(n: int) -> tuple[int, Dataset]:
+    schema = """
+    CREATE TABLE a (id SERIAL PRIMARY KEY);
+    CREATE TABLE b (id SERIAL PRIMARY KEY);
+    CREATE TABLE x (
+        id UUID PRIMARY KEY,
+        a_id INT NOT NULL REFERENCES a(id),
+        b_id INT NOT NULL REFERENCES b(id),
+        note TEXT,
+        flag BOOLEAN,
+        UNIQUE (a_id, b_id)
+    );
+    """
+    dataset = generate_dataset(
+        parse_ddl(schema),
+        Config(
+            seed=4,
+            tables={"a": TableConfig(rows=n), "b": TableConfig(rows=n), "x": TableConfig(rows=n)},
+        ),
+    )
+    return engine._SELECTION_WORK.compound_pairs_examined, dataset
+
+
+def test_regular_compound_unique_selection_work_scales_with_requested_pairs() -> None:
+    work_small, small = _regular_compound_probe(200)
+    work_big, big = _regular_compound_probe(800)
+
+    assert small.quarantine == {} and big.quarantine == {}
+    assert work_small == 200
+    assert work_big == 800
+    assert work_big <= 8 * work_small
+
+
 # --- Bloqueante 1 (revisión de d86e249): dos cuotas compartidas coordinadas ----
 
 _TWO_QUOTA_SCHEMA = """
