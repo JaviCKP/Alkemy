@@ -455,9 +455,11 @@ class TableAssigner:
             for offsets in increments:
                 capacity = row_count
                 for offset in offsets:
-                    capacity = min(capacity, layout[offset][3] - base_counts[offset])
+                    limit = layout[offset][3] - base_counts[offset]
+                    if limit < capacity:
+                        capacity = limit
                     self.work.global_solver_work += 1
-                option_caps.append(max(0, capacity))
+                option_caps.append(capacity if capacity > 0 else 0)
 
             suffix_rows = [0] * (option_count + 1)
             for option_index in range(option_count - 1, -1, -1):
@@ -519,20 +521,25 @@ class TableAssigner:
                     capacity = option_caps[option_index]
                     high = remaining_rows
                     for offset in increments[option_index]:
-                        high = min(high, layout[offset][3] - counts[offset])
+                        limit = layout[offset][3] - counts[offset]
+                        if limit < high:
+                            high = limit
                     later_resources = {
                         offset: suffix_resources[offset] - capacity
                         for offset in increments[option_index]
                     }
-                    low = max(0, remaining_rows - suffix_rows[option_index + 1])
+                    low = remaining_rows - suffix_rows[option_index + 1]
+                    if low < 0:
+                        low = 0
                     for offset in increments[option_index]:
-                        low = max(
-                            low,
+                        limit = (
                             layout[offset][2]
                             - counts[offset]
                             - later_resources[offset]
-                            - future_capacity[offset],
+                            - future_capacity[offset]
                         )
+                        if limit > low:
+                            low = limit
                     lower_bounds[option_index] = low
                     next_values[option_index] = high
 
