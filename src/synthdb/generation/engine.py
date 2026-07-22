@@ -18,6 +18,7 @@ from synthdb.constraints.check_interp import interpret_checks
 from synthdb.generation.context import RowContext, build_column_order, mapping_resolver
 from synthdb.generation.fk import (
     NullRatioSelector,
+    QuotaInfeasibleError,
     UniformSelector,
     UniqueSubsetSelector,
     ZipfSelector,
@@ -120,6 +121,7 @@ class _FkSelectionState:
     parent_indices_by_projection: dict[tuple[str, ...], dict[tuple[Any, ...], list[int]]] = field(
         default_factory=dict
     )
+    filtered_candidates_cache: dict[tuple[Any, ...], list[int]] = field(default_factory=dict)
 
 
 @dataclass
@@ -162,6 +164,22 @@ class Dataset:
 
 FkKey: TypeAlias = tuple[str, ...]
 RandomState: TypeAlias = tuple[Any, ...]
+
+# Contador observable de candidatos examinados al filtrar por FKs obligatorias
+# compartidas. No influye en la salida; existe para que un test de regresión
+# verifique que la selección compartida escala de forma lineal, no cuadrática
+# (revisión PR #45, hallazgo 3). Se reinicia al comenzar cada `generate_dataset`.
+_FILTER_SCAN_COUNT = 0
+
+
+def filter_scan_count() -> int:
+    """Candidatos examinados por el filtro de FKs obligatorias desde el último reinicio.
+
+    Ayuda observable para las regresiones de complejidad: la selección de FKs
+    compartidas construye sus proyecciones una vez por tabla, así que este contador
+    crece de forma lineal con el número de filas y padres, nunca como su producto.
+    """
+    return _FILTER_SCAN_COUNT
 
 
 def complete_batch(batch: list[dict[str, Any]]) -> None:
@@ -540,7 +558,7 @@ def _prepare_fk_assignments(
     table_seed = seed_for_table(config.seed, compiled.spec.name)
     row_rngs = [rng_for_row(table_seed, index) for index in range(total)]
     states = _build_fk_selection_states(
-        compiled, total, config, dataset, store, row_rngs, deferred_relation
+        compiled, total, config, dataset, store, row_rngs, deferred_relation, unresolved_relations
     )
     assignments: list[dict[FkKey, int | None]] = []
     for row_index, rng in enumerate(row_rngs):
@@ -554,8 +572,106 @@ def _prepare_fk_assignments(
             unresolved_relations=unresolved_relations,
         )
         assignments.append(row_assignments)
-    _deduplicate_bridge_assignments(compiled, assignments, row_rngs, store)
+    _deduplicate_bridge_assignments(compiled, assignments, row_rngs, dataset)
     return assignments, [rng.getstate() for rng in row_rngs]
+
+
+def _usable_quota_parents(
+    compiled: _CompiledTable,
+    fk: RelationshipSpec,
+    dataset: Dataset,
+    deferred_relation: FkKey,
+    unresolved_relations: frozenset[FkKey],
+) -> list[int]:
+    """Padres de una FK con cuota que tienen combinación en las demás FKs obligatorias.
+
+    La cuota reparte hijos entre TODOS los padres, pero una FK compartida obliga a
+    un discriminador: un padre cuyo discriminador no exista en la otra relación no
+    puede recibir ningún hijo sin dejar esa otra FK colgando. Devuelve, en orden de
+    inserción, solo los índices de padre utilizables, para que el reparto respete
+    `min/max` sin producir referencias incompatibles. Una FK obligatoria cuyo padre
+    quedó totalmente en cuarentena (``unresolved_relations``) no restringe: la fila
+    hija se apartará por esa vía.
+    """
+    parent_name = _CURRENT_TABLE_INDEX[fk.ref_table].name
+    parent_rows = dataset.tables[parent_name]
+    fk_ref = dict(zip(fk.columns, fk.ref_columns, strict=True))
+    constraints: list[tuple[list[str], set[tuple[Any, ...]]]] = []
+    for other in compiled.spec.foreign_keys:
+        if other is fk or tuple(other.columns) == deferred_relation:
+            continue
+        if _nullable_fk_columns(other) or tuple(other.columns) in unresolved_relations:
+            continue
+        shared = [column for column in fk.columns if column in other.columns]
+        if not shared:
+            continue
+        other_ref = dict(zip(other.columns, other.ref_columns, strict=True))
+        other_rows = dataset.tables[_CURRENT_TABLE_INDEX[other.ref_table].name]
+        present = {
+            tuple(_marker(row.get(other_ref[column])) for column in shared) for row in other_rows
+        }
+        constraints.append((shared, present))
+    if not constraints:
+        return list(range(len(parent_rows)))
+    return [
+        index
+        for index, row in enumerate(parent_rows)
+        if all(
+            tuple(_marker(row.get(fk_ref[column])) for column in shared) in present
+            for shared, present in constraints
+        )
+    ]
+
+
+def _build_shared_quota(
+    compiled: _CompiledTable,
+    fk: RelationshipSpec,
+    dataset: Dataset,
+    quota_rng: Random,
+    non_null: list[int],
+    total: int,
+    params: dict[str, Any],
+    parent_count: int,
+    deferred_relation: FkKey,
+    unresolved_relations: frozenset[FkKey],
+) -> list[int]:
+    """Reparte una cuota respetando las FKs compartidas, o falla de forma accionable.
+
+    Solo se reparte entre padres utilizables (con combinación compatible en las
+    demás FKs obligatorias compartidas). Si `min > 0` y algún padre es inutilizable
+    no podría alcanzar su mínimo: es una contradicción de plan y se rechaza con un
+    error que nombra la FK, la cuota y la incompatibilidad (CLAUDE.md: las
+    contradicciones se rechazan, no se relajan). El reparto sobre padres utilizables
+    es idéntico al normal cuando todos lo son, así que no altera las cuotas ya
+    factibles.
+    """
+    usable = _usable_quota_parents(compiled, fk, dataset, deferred_relation, unresolved_relations)
+    min_per, max_per = int(params["min"]), int(params["max"])
+    incompatible = parent_count - len(usable)
+    relation = f"FK ({', '.join(fk.columns)}) -> {fk.ref_table}"
+    if incompatible > 0 and min_per > 0:
+        raise GenerationError(
+            f"tabla {compiled.spec.name}, {relation} con cuota [min={min_per}, max={max_per}]: "
+            f"{incompatible} de {parent_count} padres no tienen ninguna combinación compatible "
+            f"en las FKs que comparten columnas, pero min={min_per} exige que cada padre reciba "
+            f"al menos {min_per} hijo(s). Añade padres compatibles, baja 'min' o revisa las "
+            "columnas compartidas de la relación."
+        )
+    try:
+        positions = build_quota_assignment(quota_rng, len(usable), len(non_null), min_per, max_per)
+    except QuotaInfeasibleError as exc:
+        if incompatible > 0:
+            raise GenerationError(
+                f"tabla {compiled.spec.name}, {relation} con cuota [min={min_per}, max={max_per}]: "
+                f"solo {len(usable)} de {parent_count} padres tienen combinación compatible en las "
+                f"FKs compartidas y no alcanzan para {len(non_null)} hijos. Añade padres "
+                "compatibles o ajusta la cuota."
+            ) from exc
+        raise
+    quota = [-1] * total
+    for row_index, position in zip(non_null, positions, strict=True):
+        quota[row_index] = usable[position]
+    return quota
 
 
 def _build_fk_selection_states(
@@ -566,6 +682,7 @@ def _build_fk_selection_states(
     store: KeyStore,
     row_rngs: list[Random],
     deferred_relation: FkKey,
+    unresolved_relations: frozenset[FkKey] = frozenset(),
 ) -> dict[FkKey, _FkSelectionState]:
     """Prepara los selectores y cuotas que comparten una tabla completa."""
     foreign_keys = [
@@ -601,16 +718,30 @@ def _build_fk_selection_states(
         if strategy == "quota":
             non_null = [i for i, rng in enumerate(row_rngs) if rng.random() >= null_ratio]
             quota_rng = Random(seed_for_table(config.seed, f"{compiled.spec.name}:{','.join(key)}"))
-            quota = build_quota_assignment(
-                quota_rng,
-                parent_count,
-                len(non_null),
-                int(params["min"]),
-                int(params["max"]),
-            )
-            state.quota = [-1] * total
-            for row_index, parent_index in zip(non_null, quota, strict=True):
-                state.quota[row_index] = parent_index
+            if shared_columns:
+                state.quota = _build_shared_quota(
+                    compiled,
+                    fk,
+                    dataset,
+                    quota_rng,
+                    non_null,
+                    total,
+                    params,
+                    parent_count,
+                    deferred_relation,
+                    unresolved_relations,
+                )
+            else:
+                quota = build_quota_assignment(
+                    quota_rng,
+                    parent_count,
+                    len(non_null),
+                    int(params["min"]),
+                    int(params["max"]),
+                )
+                state.quota = [-1] * total
+                for row_index, parent_index in zip(non_null, quota, strict=True):
+                    state.quota[row_index] = parent_index
         elif strategy == "zipf":
             state.selector = ZipfSelector(parent_count, float(params.get("s", 1.2)))
         elif strategy == "unique_subset":
@@ -651,6 +782,28 @@ def _ordered_foreign_keys(
             ),
         )
     ]
+
+
+def _prioritize_shared_quota(
+    ordered_fks: list[RelationshipSpec], states: dict[FkKey, _FkSelectionState]
+) -> list[RelationshipSpec]:
+    """Procesa primero una FK de cuota compartida dentro de una tabla compartida.
+
+    Una cuota fija el padre de cada fila de antemano; si otra FK compartida eligiera
+    antes el discriminador, la cuota chocaría con él. Poniéndola primero, su padre
+    fija el discriminador y las demás FKs compartidas se ajustan. Es una reordenación
+    estable acotada a las FKs de cuota compartidas: para cualquier tabla sin ellas el
+    orden es idéntico al de `_ordered_foreign_keys`, así que no altera la selección de
+    las tablas ya existentes.
+    """
+    return sorted(
+        ordered_fks,
+        key=lambda fk: (
+            0
+            if ((state := states[tuple(fk.columns)]).shared_columns and state.strategy == "quota")
+            else 1
+        ),
+    )
 
 
 def _nullable_fk_columns(fk: RelationshipSpec) -> tuple[str, ...]:
@@ -718,18 +871,41 @@ def _filter_candidates_by_required_fks(
     puede fijar un discriminador que otra FK necesita. Mirar una fila de cada
     relación futura evita escoger al azar un padre que luego obligue a abortar,
     sin reordenar ni consumir el estado determinista de los selectores.
+
+    La factibilidad de un candidato depende solo de los valores compartidos que
+    fija (no de qué fila lo pide), así que el resultado se memoiza por el conjunto
+    de valores locales ya fijados. En una tabla normal ese conjunto es el mismo
+    para todas las filas, de modo que el filtro se calcula una vez por tabla en
+    lugar de una vez por fila: el coste deja de ser filas × padres (revisión PR
+    #45, hallazgo 3). La caché se omite cuando una FK obligatoria restante usa
+    `unique_subset` compartido, cuyo soporte se agota fila a fila.
     """
+    global _FILTER_SCAN_COUNT
+    constraining = [
+        other
+        for other in remaining_fks
+        if not _nullable_fk_columns(other) and tuple(other.columns) not in unresolved_relations
+    ]
+    cache_key: tuple[Any, ...] | None = None
+    if all(states[tuple(other.columns)].unique_remaining is None for other in constraining):
+        cache_key = tuple(
+            sorted(
+                (column, _marker(value))
+                for column, value in local_values.items()
+                if value is not None
+            )
+        )
+        cached = state.filtered_candidates_cache.get(cache_key)
+        if cached is not None:
+            return cached
     supported: list[int] = []
     for candidate in candidates:
+        _FILTER_SCAN_COUNT += 1
         merged = _merge_parent_local_values(state.fk, state.parent_rows[candidate], local_values)
         if merged is None:
             continue
         feasible = True
-        for other in remaining_fks:
-            if _nullable_fk_columns(other):
-                continue
-            if tuple(other.columns) in unresolved_relations:
-                continue
+        for other in constraining:
             other_state = states[tuple(other.columns)]
             if not other_state.parent_rows:
                 if allow_missing_parents:
@@ -746,6 +922,8 @@ def _filter_candidates_by_required_fks(
                 break
         if feasible:
             supported.append(candidate)
+    if cache_key is not None:
+        state.filtered_candidates_cache[cache_key] = supported
     return supported
 
 
@@ -766,7 +944,18 @@ def _pick_compatible_parent(
             return None
         if selected in candidates:
             return selected
-        return candidates[rng.randrange(len(candidates))]
+        # La cuota es un contrato de tabla, no una preferencia: si el padre que le
+        # tocó a esta fila es incompatible con un discriminador ya fijado por otra
+        # FK compartida, reemplazarlo por uno aleatorio incumpliría min/max en
+        # silencio (revisión PR #45, hallazgo 2). El reparto compatible se decide
+        # antes, en `_build_shared_quota`; aquí un conflicto residual es un fallo
+        # accionable, nunca una degradación muda.
+        raise GenerationError(
+            f"FK ({', '.join(state.fk.columns)}) -> {state.fk.ref_table}: la cuota asignó el "
+            f"padre índice {selected}, pero las FKs que comparten columnas ya fijaron un "
+            "discriminador incompatible para esta fila. La cuota no puede reasignarse en "
+            "silencio; revisa el orden de las relaciones compartidas o su estrategia."
+        )
     null_ratio = float(state.params.get("null_ratio", 0.0))
     if null_ratio and rng.random() < null_ratio:
         return None
@@ -826,7 +1015,8 @@ def _select_fk_assignments(
     """Selecciona todas las FKs de una fila respetando los valores ya fijados."""
     assignments: dict[FkKey, int | None] = {}
     local_values = dict(initial_values or {})
-    ordered_fks = _ordered_foreign_keys(compiled, deferred_relation)
+    base_order = _ordered_foreign_keys(compiled, deferred_relation)
+    ordered_fks = _prioritize_shared_quota(base_order, states)
     null_locked: set[str] = set()
     if deferred_relation:
         deferred_fk = next(
@@ -900,14 +1090,82 @@ def _deduplicate_bridge_assignments(
     compiled: _CompiledTable,
     assignments: list[dict[FkKey, int | None]],
     row_rngs: list[Random],
-    store: KeyStore,
+    dataset: Dataset,
 ) -> None:
-    """Aplica la restricción de pares de una tabla puente tras seleccionar sus FKs."""
-    if compiled.spec.kind != "bridge":
+    """Aplica la restricción de pares de una tabla puente tras seleccionar sus FKs.
+
+    Cuando las dos FKs comparten columnas (un puente multi-tenant), un par
+    duplicado no puede resolverse mutando solo el índice derecho: el nuevo padre
+    podría pertenecer a otro discriminador y romper el valor compartido (revisión
+    PR #45, hallazgo 1). Se precalculan una vez las combinaciones compatibles por
+    los valores compartidos y la deduplicación elige un par completo todavía sin
+    usar dentro de ellas.
+    """
+    if compiled.spec.kind != "bridge" or len(compiled.spec.foreign_keys) < 2:
         return
+    first, second = compiled.spec.foreign_keys[:2]
+    shared = [column for column in first.columns if column in second.columns]
+    right_rows = dataset.tables[_CURRENT_TABLE_INDEX[second.ref_table].name]
+    groups: dict[tuple[Any, ...], tuple[list[int], list[int]]] | None = None
+    available = 0
+    if shared:
+        left_rows = dataset.tables[_CURRENT_TABLE_INDEX[first.ref_table].name]
+        groups = _bridge_compatible_pairs(first, second, shared, left_rows, right_rows)
+        available = sum(len(lefts) * len(rights) for lefts, rights in groups.values())
+    context = _BridgeDedupContext(
+        first_key=tuple(first.columns),
+        second_key=tuple(second.columns),
+        shared=shared,
+        right_count=len(right_rows),
+        groups=groups,
+        available=available,
+        requested=len(assignments),
+    )
     seen_bridge_pairs: set[tuple[Any, ...]] = set()
     for assignment, rng in zip(assignments, row_rngs, strict=True):
-        _deduplicate_bridge_pair(compiled.spec, assignment, rng, store, seen_bridge_pairs)
+        _deduplicate_bridge_pair(compiled.spec, context, assignment, rng, seen_bridge_pairs)
+
+
+@dataclass(frozen=True)
+class _BridgeDedupContext:
+    """Datos precalculados una vez por tabla puente para deduplicar sus pares."""
+
+    first_key: FkKey
+    second_key: FkKey
+    shared: list[str]
+    right_count: int
+    groups: dict[tuple[Any, ...], tuple[list[int], list[int]]] | None
+    available: int
+    requested: int
+
+
+def _bridge_compatible_pairs(
+    first: RelationshipSpec,
+    second: RelationshipSpec,
+    shared: list[str],
+    left_rows: list[dict[str, Any]],
+    right_rows: list[dict[str, Any]],
+) -> dict[tuple[Any, ...], tuple[list[int], list[int]]]:
+    """Agrupa índices de padres izquierdos y derechos por sus valores compartidos.
+
+    Solo los grupos presentes en AMBOS lados producen pares válidos; dentro de un
+    grupo cualquier (izquierda, derecha) es compatible en las columnas compartidas.
+    """
+    first_ref = dict(zip(first.columns, first.ref_columns, strict=True))
+    second_ref = dict(zip(second.columns, second.ref_columns, strict=True))
+    lefts_by: dict[tuple[Any, ...], list[int]] = {}
+    for index, row in enumerate(left_rows):
+        lefts_by.setdefault(
+            tuple(_marker(row.get(first_ref[column])) for column in shared), []
+        ).append(index)
+    rights_by: dict[tuple[Any, ...], list[int]] = {}
+    for index, row in enumerate(right_rows):
+        rights_by.setdefault(
+            tuple(_marker(row.get(second_ref[column])) for column in shared), []
+        ).append(index)
+    return {
+        group: (lefts, rights_by[group]) for group, lefts in lefts_by.items() if group in rights_by
+    }
 
 
 def _fk_params(compiled: _CompiledTable, fk: RelationshipSpec, config: Config) -> dict[str, Any]:
@@ -924,32 +1182,50 @@ def _fk_params(compiled: _CompiledTable, fk: RelationshipSpec, config: Config) -
 
 def _deduplicate_bridge_pair(
     table: TableSpec,
+    context: _BridgeDedupContext,
     assignment: dict[FkKey, int | None],
     rng: Random,
-    store: KeyStore,
     seen: set[tuple[Any, ...]],
 ) -> None:
-    if len(table.foreign_keys) < 2:
-        return
-    first, second = table.foreign_keys[:2]
-    first_key, second_key = tuple(first.columns), tuple(second.columns)
-    left, right = assignment.get(first_key), assignment.get(second_key)
+    left, right = assignment.get(context.first_key), assignment.get(context.second_key)
     if left is None or right is None:
         return
     pair = (left, right)
     if pair not in seen:
         seen.add(pair)
         return
-    parent_name = _CURRENT_TABLE_INDEX[second.ref_table].name
-    candidates = [index for index in range(store.count(parent_name)) if (left, index) not in seen]
-    if not candidates:
-        raise GenerationError(
-            f"tabla puente {table.name}: no quedan pares FK únicos para las "
-            "filas solicitadas; reduce la cardinalidad o aumenta las tablas padre."
-        )
-    right = candidates[rng.randrange(len(candidates))]
-    assignment[second_key] = right
-    seen.add((left, right))
+    if context.groups is None:
+        # Sin columnas compartidas: cualquier padre derecho es compatible con la
+        # izquierda ya fijada, así que basta buscar una derecha aún sin usar.
+        candidates = [index for index in range(context.right_count) if (left, index) not in seen]
+        if not candidates:
+            raise GenerationError(
+                f"tabla puente {table.name}: no quedan pares FK únicos para las "
+                "filas solicitadas; reduce la cardinalidad o aumenta las tablas padre."
+            )
+        chosen: tuple[int, int] = (left, candidates[rng.randrange(len(candidates))])
+    else:
+        # Con columnas compartidas se reconsidera el par completo: cualquier
+        # combinación válida (compatible por los valores compartidos) todavía sin
+        # usar sirve, no solo las que conservan la izquierda actual.
+        unused = [
+            (candidate_left, candidate_right)
+            for lefts, rights in context.groups.values()
+            for candidate_left in lefts
+            for candidate_right in rights
+            if (candidate_left, candidate_right) not in seen
+        ]
+        if not unused:
+            raise GenerationError(
+                f"tabla puente {table.name}: se piden {context.requested} filas pero solo "
+                f"existen {context.available} combinaciones de FK compatibles por las columnas "
+                f"compartidas ({', '.join(context.shared)}). Reduce la cardinalidad o añade "
+                "filas padre compatibles."
+            )
+        chosen = unused[rng.randrange(len(unused))]
+    assignment[context.first_key] = chosen[0]
+    assignment[context.second_key] = chosen[1]
+    seen.add(chosen)
 
 
 def _generate_row(
@@ -1259,6 +1535,7 @@ def _generate_leveled_table(
     indices_by_level: dict[int, list[int]] = {}
     self_fk = _self_fk(compiled.spec, phase.self_fk_columns, _CURRENT_TABLE_INDEX)
     self_fk_key = tuple(phase.self_fk_columns)
+    unresolved_relations = _quarantined_empty_parent_relations(compiled, config, dataset)
     selection_states = _build_fk_selection_states(
         compiled,
         total,
@@ -1267,8 +1544,8 @@ def _generate_leveled_table(
         store,
         row_rngs,
         self_fk_key,
+        unresolved_relations,
     )
-    unresolved_relations = _quarantined_empty_parent_relations(compiled, config, dataset)
     for start in range(0, total, config.output.batch_size):
         batch: list[dict[str, Any]] = []
         for row_number in range(start, min(total, start + config.output.batch_size)):
@@ -1594,9 +1871,10 @@ def _resync_updates(dataset: Dataset) -> None:
 
 def _install_run_context(spec: SchemaSpec, dataset: Dataset) -> None:
     global _CURRENT_DATASET, _CURRENT_SPEC, _CURRENT_TABLE_INDEX
-    global _CURRENT_UNIQUE, _CURRENT_COMPOSITE
+    global _CURRENT_UNIQUE, _CURRENT_COMPOSITE, _FILTER_SCAN_COUNT
     _CURRENT_DATASET = dataset
     _CURRENT_SPEC = spec
     _CURRENT_TABLE_INDEX = index_tables(spec)
     _CURRENT_UNIQUE = {}
     _CURRENT_COMPOSITE = {}
+    _FILTER_SCAN_COUNT = 0

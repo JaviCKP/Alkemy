@@ -548,6 +548,28 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- Revisión adversarial del PR #45 sobre el selector de FKs compartidas
+  (`generation/engine.py`), sin tocar la IR ni los generadores:
+  - **Puente multi-tenant.** La deduplicación de una tabla puente reconsidera el
+    par completo: busca una combinación válida (compatible por los valores
+    compartidos) todavía sin usar en lugar de mutar solo el índice derecho, que
+    podía elegir otro tenant y abortar la generación. Al agotarse las
+    combinaciones válidas produce un `GenerationError` con la tabla, la
+    cardinalidad solicitada y las combinaciones disponibles.
+  - **Cuota compartida.** La cuota es un contrato de tabla: sobre FKs que
+    comparten columnas se reparte solo entre padres con combinación compatible en
+    las demás FKs obligatorias y falla de forma accionable si `min/max` no puede
+    cumplirse, en vez de sustituir en silencio una asignación incompatible por un
+    padre aleatorio. Una FK de cuota compartida se procesa antes que las demás.
+  - **Complejidad O(n²).** El filtrado de candidatos por las FKs obligatorias se
+    memoiza por los valores locales fijados y las proyecciones por columnas
+    compartidas se construyen una vez por tabla; el coste pasa a ser lineal en
+    filas y padres. `engine.filter_scan_count()` expone la métrica para una
+    regresión de complejidad no frágil.
+  - Nuevas regresiones de puente multi-tenant (semillas 1/4/5/10/11/12/18/19),
+    cuota compatible e incompatible, contratos de `uniform`/`zipf`/`unique_subset`
+    sobre FKs compartidas y escalado lineal, todas deterministas por `batch_size`.
+
 - Issue #44: las autorreferencias compuestas multi-tenant se generan por niveles
   usando `nullable_columns` bajo `MATCH SIMPLE`/`MATCH FULL`; las FKs no
   autorreferentes se asignan antes de la jerarquía, comparten restricciones de
