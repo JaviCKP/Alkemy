@@ -633,8 +633,8 @@ def _compound_unique_constraints(
     A restriction is managed jointly only when every one of its columns belongs
     to at least one FK and at least two distinct FKs contribute a column. A
     normal regenerable attribute therefore cannot accidentally turn on this
-    route, while a shared discriminator remains part of the participating
-    relations.
+    route. FKs that contribute only a shared discriminator remain compatibility
+    relations, but they do not become UNIQUE dimensions.
     """
     groups: list[tuple[str, ...]] = []
     if spec.primary_key:
@@ -650,13 +650,27 @@ def _compound_unique_constraints(
         relations = tuple(
             tuple(fk.columns) for fk in spec.foreign_keys if set(fk.columns).intersection(group)
         )
-        if len(relations) < 2:
+        owners: dict[str, list[FkKey]] = {}
+        for fk in spec.foreign_keys:
+            key = tuple(fk.columns)
+            for column in fk.columns:
+                if column in group and key not in owners.setdefault(column, []):
+                    owners[column].append(key)
+        dimensions = tuple(
+            tuple(fk.columns)
+            for fk in spec.foreign_keys
+            if any(column in group and len(owners.get(column, ())) == 1 for column in fk.columns)
+        )
+        covered = {column for relation in dimensions for column in relation if column in group}
+        if len(dimensions) < 2 or covered != set(group):
             continue
-        if deferred_relation and deferred_relation in relations:
+        if deferred_relation and deferred_relation in dimensions:
             # A deferred FK is filled only after the table has been generated;
             # it cannot participate in a pre-generation no-replacement plan.
             continue
-        contracts.append(CompoundUniqueConstraint(columns=group, relations=relations))
+        contracts.append(
+            CompoundUniqueConstraint(columns=group, relations=relations, dimensions=dimensions)
+        )
     return tuple(contracts)
 
 

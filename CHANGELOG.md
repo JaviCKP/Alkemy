@@ -548,6 +548,12 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- PR #49 (correction): compound UNIQUE contracts also govern bridge tables and
+  calculate capacity over the exact UNIQUE projection, deduplicating physical
+  parent versions. FKs that share only the discriminator remain compatibility
+  relations without becoming uniqueness dimensions; their quotas,
+  `unique_subset`, nullability, and RI are still prepared for the component.
+
 - Issue #46: la heurística `codigo` selecciona `sequence` para columnas
   `INTEGER` y conserva `template` para tipos textuales. El fusor comprueba las
   propuestas heurísticas contra el `TypeSpec`: una incompatibilidad cae al

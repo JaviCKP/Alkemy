@@ -494,6 +494,239 @@ def test_regular_multitenant_compound_unique_keeps_shared_discriminator(
     )
 
 
+_BRIDGE_PROJECTED_COMPOUND_UNIQUE_SCHEMA = """
+CREATE TABLE a (
+    pk SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    logical_id INT NOT NULL,
+    version INT NOT NULL,
+    UNIQUE (tenant_id, logical_id, version)
+);
+CREATE TABLE b (
+    pk SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    logical_id INT NOT NULL,
+    version INT NOT NULL,
+    UNIQUE (tenant_id, logical_id, version)
+);
+CREATE TABLE x (
+    pk SERIAL PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    a_id INT NOT NULL,
+    a_version INT NOT NULL,
+    b_id INT NOT NULL,
+    b_version INT NOT NULL,
+    UNIQUE (tenant_id, a_id, b_id),
+    FOREIGN KEY (tenant_id, a_id, a_version)
+        REFERENCES a(tenant_id, logical_id, version),
+    FOREIGN KEY (tenant_id, b_id, b_version)
+        REFERENCES b(tenant_id, logical_id, version)
+);
+"""
+
+
+def _projected_bridge_config(
+    *,
+    seed: int,
+    batch_size: int,
+    logical_ids: tuple[tuple[int, ...], tuple[int, ...]],
+    rows: int,
+) -> Config:
+    def logical_config(values: tuple[int, ...]) -> ColumnConfig:
+        if len(set(values)) == 1:
+            return ColumnConfig(generator="choice", params={"values": [values[0]]})
+        return _seq(values[0])
+
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(
+                rows=2,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [1]}),
+                    "logical_id": logical_config(logical_ids[0]),
+                    "version": _seq(1),
+                },
+            ),
+            "b": TableConfig(
+                rows=2,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [1]}),
+                    "logical_id": logical_config(logical_ids[1]),
+                    "version": _seq(1),
+                },
+            ),
+            "x": TableConfig(rows=rows),
+        },
+        output=OutputConfig(batch_size=batch_size, on_error="abort"),
+    )
+
+
+@pytest.mark.parametrize("seed", range(5))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_bridge_compound_unique_rejects_projected_capacity_before_generation(
+    seed: int, batch_size: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bridge capacity must use UNIQUE projections, not physical parent versions."""
+    calls = 0
+    original_generate_row = engine._generate_row
+
+    def tracked_generate_row(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        compiled = args[0]
+        if getattr(getattr(compiled, "spec", None), "name", None) == "x":
+            calls += 1
+        return original_generate_row(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_generate_row", tracked_generate_row)
+    with pytest.raises(GenerationError) as exc_info:
+        generate_dataset(
+            parse_ddl(_BRIDGE_PROJECTED_COMPOUND_UNIQUE_SCHEMA),
+            _projected_bridge_config(
+                seed=seed, batch_size=batch_size, logical_ids=((10,), (20,)), rows=2
+            ),
+        )
+
+    assert str(exc_info.value) == (
+        "tabla x: la restricción (tenant_id, a_id, b_id) solicita 2 filas activas "
+        "pero solo tiene capacidad 1 (1 combinación compatible) sin repetición. "
+        "Reduce las filas solicitadas o "
+        "añade padres compatibles."
+    )
+    assert calls == 0
+
+
+@pytest.mark.parametrize("seed", range(10))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_bridge_compound_unique_uses_distinct_projections(seed: int, batch_size: int) -> None:
+    dataset = generate_dataset(
+        parse_ddl(_BRIDGE_PROJECTED_COMPOUND_UNIQUE_SCHEMA),
+        _projected_bridge_config(
+            seed=seed, batch_size=batch_size, logical_ids=((10, 11), (20, 21)), rows=2
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["x"]
+    assert len(rows) == 2
+    assert len({(row["tenant_id"], row["a_id"], row["b_id"]) for row in rows}) == 2
+    a_keys = {(row["tenant_id"], row["logical_id"], row["version"]) for row in dataset.tables["a"]}
+    b_keys = {(row["tenant_id"], row["logical_id"], row["version"]) for row in dataset.tables["b"]}
+    assert all(
+        (row["tenant_id"], row["a_id"], row["a_version"]) in a_keys
+        and (row["tenant_id"], row["b_id"], row["b_version"]) in b_keys
+        for row in rows
+    )
+
+
+@pytest.mark.parametrize("seed", [0, 7])
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_bridge_compound_unique_accepts_exact_projected_capacity(
+    seed: int, batch_size: int
+) -> None:
+    dataset = generate_dataset(
+        parse_ddl(_BRIDGE_PROJECTED_COMPOUND_UNIQUE_SCHEMA),
+        _projected_bridge_config(
+            seed=seed, batch_size=batch_size, logical_ids=((10,), (20,)), rows=1
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    assert len(dataset.tables["x"]) == 1
+    row = dataset.tables["x"][0]
+    assert (row["tenant_id"], row["a_id"], row["b_id"]) == (1, 10, 20)
+
+
+_REGULAR_UNIQUE_DIMENSIONS_WITH_COMPATIBILITY_FK_SCHEMA = """
+CREATE TABLE a (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE b (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE c (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE x (
+    pk UUID PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    a_id INT NOT NULL,
+    b_id INT NOT NULL,
+    c_id INT NOT NULL,
+    note TEXT,
+    flag BOOLEAN,
+    extra TEXT,
+    UNIQUE (tenant_id, a_id, b_id),
+    FOREIGN KEY (tenant_id, a_id) REFERENCES a(tenant_id, id),
+    FOREIGN KEY (tenant_id, b_id) REFERENCES b(tenant_id, id),
+    FOREIGN KEY (tenant_id, c_id) REFERENCES c(tenant_id, id)
+);
+"""
+
+
+@pytest.mark.parametrize("seed", range(10))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_compound_unique_ignores_fk_that_only_shares_discriminator(
+    seed: int, batch_size: int
+) -> None:
+    config = Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(
+                rows=2,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [1]}),
+                    "id": _seq(10),
+                },
+            ),
+            "b": TableConfig(
+                rows=2,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [1]}),
+                    "id": _seq(20),
+                },
+            ),
+            "c": TableConfig(
+                rows=2,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [1]}),
+                    "id": _seq(30),
+                },
+            ),
+            "x": TableConfig(
+                rows=4,
+                fk={"c_id": FkQuota(strategy="quota", min=2, max=2)},
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size, on_error="abort"),
+    )
+    dataset = generate_dataset(
+        parse_ddl(_REGULAR_UNIQUE_DIMENSIONS_WITH_COMPATIBILITY_FK_SCHEMA), config
+    )
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["x"]
+    assert len(rows) == 4
+    assert len({(row["tenant_id"], row["a_id"], row["b_id"]) for row in rows}) == 4
+    c_counts = Counter((row["tenant_id"], row["c_id"]) for row in rows)
+    assert c_counts == {(1, 30): 2, (1, 31): 2}
+    a_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["a"]}
+    b_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["b"]}
+    c_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["c"]}
+    assert all(
+        (row["tenant_id"], row["a_id"]) in a_keys
+        and (row["tenant_id"], row["b_id"]) in b_keys
+        and (row["tenant_id"], row["c_id"]) in c_keys
+        for row in rows
+    )
+
+
 def test_regular_compound_unique_can_coordinate_three_foreign_keys() -> None:
     schema = """
     CREATE TABLE a (id SERIAL PRIMARY KEY);

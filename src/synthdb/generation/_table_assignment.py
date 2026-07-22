@@ -62,10 +62,16 @@ class AssignmentRelation:
 
 @dataclass(frozen=True)
 class CompoundUniqueConstraint:
-    """Contrato privado de una restricción cubierta por varias FKs."""
+    """Contrato privado de una restricción cubierta por varias FKs.
+
+    ``relations`` contiene todas las FKs compatibles con la restricción;
+    ``dimensions`` contiene solo las que aportan columnas propias a su
+    proyección y, por tanto, multiplican su capacidad.
+    """
 
     columns: tuple[str, ...]
     relations: tuple[FkKey, ...]
+    dimensions: tuple[FkKey, ...] = ()
 
 
 @dataclass
@@ -147,17 +153,15 @@ class TableAssigner:
             return self._row_assignments, [rng.getstate() for rng in self.row_rngs]
 
         self._prepare(validate_only=False)
-        if self.table_kind == "bridge" and len(self.relations) >= 2:
-            assignments = self._assign_bridge()
-        elif self.compound_unique_constraints:
+        if self.compound_unique_constraints:
             assignments = self._assign_compound_unique_constraints()
+        elif self.table_kind == "bridge" and len(self.relations) >= 2:
+            assignments = self._assign_bridge()
         else:
             assignments = [{} for _ in range(self.total)]
             for row_index, rng in enumerate(self.row_rngs):
                 assignments[row_index] = self.assign_row(row_index, rng)
-        if self.compound_unique_constraints and not (
-            self.table_kind == "bridge" and len(self.relations) >= 2
-        ):
+        if self.compound_unique_constraints:
             for row_index, rng in enumerate(self.row_rngs):
                 assignments[row_index].update(
                     self._assign_row_with_fixed(row_index, rng, assignments[row_index])
@@ -211,20 +215,21 @@ class TableAssigner:
         if self._prepared:
             return
         self._validate_topology()
-        if self.table_kind == "bridge" and len(self.relations) >= 2:
+        if (
+            self.table_kind == "bridge"
+            and len(self.relations) >= 2
+            and not self.compound_unique_constraints
+        ):
             self._prepared = True
             return
 
         self._prepare_null_masks()
+        compound_relation_keys = self._compound_relation_keys()
         for component in self.components:
-            has_compound_relation = bool(
-                self.compound_unique_constraints
-                and any(state.key in self._compound_relation_keys() for state in component.states)
-            )
             self._prepare_component(
                 component,
                 validate_only=validate_only,
-                prepare_managed=not has_compound_relation,
+                managed_excluded=compound_relation_keys,
             )
         self._prepared = True
 
@@ -267,10 +272,11 @@ class TableAssigner:
         component: _Component,
         *,
         validate_only: bool,
-        prepare_managed: bool = True,
+        managed_excluded: set[FkKey] | frozenset[FkKey] = frozenset(),
     ) -> None:
         if len(component.states) == 1:
-            self._prepare_single_quota(component.states[0])
+            if component.states[0].key not in managed_excluded:
+                self._prepare_single_quota(component.states[0])
             return
 
         common = set(component.states[0].relation.fk.columns)
@@ -280,17 +286,15 @@ class TableAssigner:
         for state in component.states:
             state.groups = _group_parent_indices(state.relation, component.discriminator)
 
-        if not prepare_managed:
-            return
-
         managed_states = [
             state
             for state in component.states
-            if state.relation.strategy in {"quota", "unique_subset"}
+            if state.key not in managed_excluded
+            and state.relation.strategy in {"quota", "unique_subset"}
         ]
         if managed_states and not validate_only:
-            self._prepare_managed_component(component)
-        elif any(state.relation.strategy == "quota" for state in component.states):
+            self._prepare_managed_component(component, managed_excluded)
+        elif any(state.relation.strategy == "quota" for state in managed_states):
             # A leveled table supplies a discriminator per row. Its external FK
             # quotas are deliberately rejected before they can be silently
             # reassigned against that row-specific value.
@@ -309,9 +313,15 @@ class TableAssigner:
         non_null = [index for index, is_null in enumerate(state.null_rows) if not is_null]
         state.quota = self._quota_for_rows(state, non_null)
 
-    def _prepare_managed_component(self, component: _Component) -> None:
+    def _prepare_managed_component(
+        self, component: _Component, managed_excluded: set[FkKey] | frozenset[FkKey]
+    ) -> None:
         """Assign shared groups globally for quota and without-replacement FKs."""
-        constrained = [state for state in component.states if _is_group_constraint_state(state)]
+        constrained = [
+            state
+            for state in component.states
+            if state.key not in managed_excluded and _is_group_constraint_state(state)
+        ]
         active_sets = {
             tuple(
                 row_index for row_index in range(self.total) if self._state_active(state, row_index)
@@ -1177,7 +1187,7 @@ class TableAssigner:
         return {
             relation
             for constraint in self.compound_unique_constraints
-            for relation in constraint.relations
+            for relation in (constraint.dimensions or constraint.relations)
         }
 
     def _assign_compound_unique_constraints(
@@ -1187,20 +1197,21 @@ class TableAssigner:
         assignments: list[dict[FkKey, int | None]] = [{} for _ in range(self.total)]
         by_relations: dict[tuple[FkKey, ...], list[CompoundUniqueConstraint]] = {}
         for constraint in self.compound_unique_constraints:
-            if len(constraint.columns) < 2 or len(constraint.relations) < 2:
+            relation_keys = constraint.dimensions or constraint.relations
+            if len(constraint.columns) < 2 or len(relation_keys) < 2:
                 raise self._error(
                     f"tabla {self.table_name}: la restricción compuesta "
                     f"({', '.join(constraint.columns)}) no tiene al menos dos FKs "
                     "implicadas."
                 )
-            missing = [key for key in constraint.relations if key not in self.states]
+            missing = [key for key in relation_keys if key not in self.states]
             if missing:
                 raise self._error(
                     f"tabla {self.table_name}: la restricción compuesta "
                     f"({', '.join(constraint.columns)}) requiere FKs no disponibles "
                     f"({', '.join(', '.join(key) for key in missing)})."
                 )
-            by_relations.setdefault(constraint.relations, []).append(constraint)
+            by_relations.setdefault(relation_keys, []).append(constraint)
 
         relation_groups = list(by_relations)
         for index, left_group in enumerate(relation_groups):
@@ -1326,8 +1337,9 @@ class TableAssigner:
         if len(active_rows) > capacity:
             raise self._error(
                 f"tabla {self.table_name}: la restricción {constraint_text} solicita "
-                f"{len(active_rows)} filas activas pero solo tiene {capacity} "
-                "combinaciones compatibles sin repetición. Reduce las filas "
+                f"{len(active_rows)} filas activas pero solo tiene "
+                f"{_compound_capacity_text(capacity)} "
+                "sin repetición. Reduce las filas "
                 "solicitadas o añade padres compatibles."
             )
         pair_rng = Random(
@@ -1410,8 +1422,9 @@ class TableAssigner:
         if len(active_rows) > available:
             raise self._error(
                 f"tabla {self.table_name}: la restricción {constraint_text} solicita "
-                f"{len(active_rows)} filas activas pero solo tiene {available} "
-                "combinaciones compatibles sin repetición. Reduce las filas "
+                f"{len(active_rows)} filas activas pero solo tiene "
+                f"{_compound_capacity_text(available)} "
+                "sin repetición. Reduce las filas "
                 "solicitadas o añade padres compatibles."
             )
 
@@ -1438,11 +1451,16 @@ class TableAssigner:
                     right_limited,
                 )
         except (QuotaInfeasibleError, RuntimeError, ValueError) as exc:
-            detail = str(exc).replace(
-                f"tabla puente {self.table_name}", f"tabla {self.table_name}", 1
+            table_label = (
+                f"tabla puente {self.table_name}"
+                if self.table_kind == "bridge"
+                else f"tabla {self.table_name}"
             )
+            detail = str(exc)
+            if self.table_kind != "bridge":
+                detail = detail.replace(f"tabla puente {self.table_name}", table_label, 1)
             raise self._error(
-                f"tabla {self.table_name}: la restricción {constraint_text} no tiene "
+                f"{table_label}: la restricción {constraint_text} no tiene "
                 f"una asignación conjunta factible para {len(active_rows)} filas: {detail}"
             ) from exc
 
@@ -1452,6 +1470,8 @@ class TableAssigner:
                 f"produjo {len(pairs)} de {len(active_rows)} asignaciones requeridas."
             )
         self.work.compound_pairs_examined += len(pairs)
+        if self.table_kind == "bridge":
+            self.work.bridge_pairs_examined += len(pairs)
         pair_by_row = list(zip(active_rows, pairs, strict=True))
         pair_by_row.sort(key=lambda item: item[0])
         for row_index, (left_index, right_index) in pair_by_row:
@@ -1820,6 +1840,13 @@ def _product_size(options: Sequence[Sequence[int]]) -> int:
     for items in options:
         result *= len(items)
     return result
+
+
+def _compound_capacity_text(capacity: int) -> str:
+    """Describe a compound UNIQUE capacity with stable singular/plural wording."""
+    if capacity == 1:
+        return "capacidad 1 (1 combinación compatible)"
+    return f"capacidad {capacity} ({capacity} combinaciones compatibles)"
 
 
 def _sample_uniform_tuples(
