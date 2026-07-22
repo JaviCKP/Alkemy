@@ -433,25 +433,147 @@ class TableAssigner:
                     future_possible[signature_index][offset] += row_count
                     self.work.global_solver_work += 1
 
-        def allocation_candidates(row_count: int, option_count: int) -> Iterator[tuple[int, ...]]:
-            """Yield all aggregate distributions without a row-depth call stack."""
-            if option_count == 1:
-                yield (row_count,)
+        def allocation_candidates(
+            row_count: int,
+            increments: tuple[tuple[int, ...], ...],
+            base_counts: tuple[int, ...],
+            future_capacity: list[int],
+        ) -> Iterator[tuple[int, ...]]:
+            """Yield only distributions that can still satisfy residual bounds.
+
+            The old generator enumerated every weak composition of ``row_count``
+            and let ``apply_allocation`` reject almost all of them afterwards.
+            Here every option receives a residual capacity before the iterative
+            search starts, and each prefix is rejected when its remaining rows
+            cannot meet a minimum with the current suffix and future signatures.
+            The search remains complete, but its first candidate for bounded
+            groups is already capacity-aware instead of concentrated in one
+            group.
+            """
+            option_count = len(increments)
+            option_caps: list[int] = []
+            for offsets in increments:
+                capacity = row_count
+                for offset in offsets:
+                    capacity = min(capacity, layout[offset][3] - base_counts[offset])
+                    self.work.global_solver_work += 1
+                option_caps.append(max(0, capacity))
+
+            suffix_rows = [0] * (option_count + 1)
+            for option_index in range(option_count - 1, -1, -1):
+                suffix_rows[option_index] = (
+                    suffix_rows[option_index + 1] + option_caps[option_index]
+                )
+                self.work.global_solver_work += 1
+            if row_count > suffix_rows[0]:
                 return
+
+            suffix_resources = [0] * len(layout)
+            for offsets, capacity in zip(increments, option_caps, strict=True):
+                for offset in offsets:
+                    suffix_resources[offset] += capacity
+                    self.work.global_solver_work += 1
+
+            def prefix_can_complete(
+                next_index: int,
+                remaining_rows: int,
+                counts: list[int],
+                changed_offsets: Sequence[int],
+            ) -> bool:
+                if remaining_rows < 0 or remaining_rows > suffix_rows[next_index]:
+                    return False
+                for offset in changed_offsets:
+                    self.work.global_solver_work += 1
+                    _, _, minimum, maximum = layout[offset]
+                    count = counts[offset]
+                    if (
+                        count > maximum
+                        or count + suffix_resources[offset] + future_capacity[offset] < minimum
+                    ):
+                        return False
+                return True
+
             parts = [0] * option_count
-            parts[0] = row_count
-            while True:
-                yield tuple(parts)
-                pivot = option_count - 2
-                while pivot >= 0 and parts[pivot] == 0:
-                    pivot -= 1
-                if pivot < 0:
-                    return
-                remainder = 1 + sum(parts[pivot + 1 :])
-                parts[pivot] -= 1
-                parts[pivot + 1] = remainder
-                for offset in range(pivot + 2, option_count):
-                    parts[offset] = 0
+            next_values: list[int | None] = [None] * option_count
+            lower_bounds = [0] * option_count
+            counts = list(base_counts)
+            remaining_rows = row_count
+            if not prefix_can_complete(0, remaining_rows, counts, range(len(layout))):
+                return
+            option_index = 0
+            while option_index >= 0:
+                if option_index == option_count:
+                    if remaining_rows == 0:
+                        yield tuple(parts)
+                    option_index -= 1
+                    if option_index >= 0:
+                        amount = parts[option_index]
+                        remaining_rows += amount
+                        for offset in increments[option_index]:
+                            counts[offset] -= amount
+                            suffix_resources[offset] += option_caps[option_index]
+                        parts[option_index] = 0
+                    continue
+
+                if next_values[option_index] is None:
+                    capacity = option_caps[option_index]
+                    high = remaining_rows
+                    for offset in increments[option_index]:
+                        high = min(high, layout[offset][3] - counts[offset])
+                    later_resources = {
+                        offset: suffix_resources[offset] - capacity
+                        for offset in increments[option_index]
+                    }
+                    low = max(0, remaining_rows - suffix_rows[option_index + 1])
+                    for offset in increments[option_index]:
+                        low = max(
+                            low,
+                            layout[offset][2]
+                            - counts[offset]
+                            - later_resources[offset]
+                            - future_capacity[offset],
+                        )
+                    lower_bounds[option_index] = low
+                    next_values[option_index] = high
+
+                candidate = next_values[option_index]
+                assert candidate is not None
+                next_values[option_index] = candidate - 1
+                if candidate < lower_bounds[option_index]:
+                    next_values[option_index] = None
+                    if option_index == 0:
+                        option_index = -1
+                    else:
+                        option_index -= 1
+                        previous = parts[option_index]
+                        remaining_rows += previous
+                        for offset in increments[option_index]:
+                            counts[offset] -= previous
+                            suffix_resources[offset] += option_caps[option_index]
+                        parts[option_index] = 0
+                    continue
+
+                parts[option_index] = candidate
+                remaining_rows -= candidate
+                for offset in increments[option_index]:
+                    counts[offset] += candidate
+                    suffix_resources[offset] -= option_caps[option_index]
+                if not prefix_can_complete(
+                    option_index + 1,
+                    remaining_rows,
+                    counts,
+                    increments[option_index],
+                ):
+                    for offset in increments[option_index]:
+                        counts[offset] -= candidate
+                        suffix_resources[offset] += option_caps[option_index]
+                    remaining_rows += candidate
+                    parts[option_index] = 0
+                    continue
+
+                option_index += 1
+                if option_index < option_count:
+                    next_values[option_index] = None
 
         def apply_allocation(
             counts: tuple[int, ...],
@@ -485,7 +607,12 @@ class TableAssigner:
             iterator = iterators[depth]
             if iterator is None:
                 row_count = len(signatures[depth][2])
-                iterator = allocation_candidates(row_count, len(signature_options[depth]))
+                iterator = allocation_candidates(
+                    row_count,
+                    signature_increments[depth],
+                    prefix_counts[depth],
+                    future_possible[depth + 1],
+                )
                 iterators[depth] = iterator
             base_counts = prefix_counts[depth]
             increments = signature_increments[depth]

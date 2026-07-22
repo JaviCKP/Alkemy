@@ -46,10 +46,12 @@ coincidir, incumplir cuotas o reconstruir el producto cartesiano de un puente.
   `unique_subset`; las relaciones obligatorias también aportan soporte al
   rango. La etiqueta de grupo de todas las filas se resuelve globalmente antes
   de escoger padres mediante un DP iterativo que agrega filas por la firma de
-  relaciones activas y grupos candidatos; la profundidad del solver depende de
-  las firmas, no de la cardinalidad de la tabla. Se rechaza de forma estable
-  cualquier combinación infactible; nunca se sustituye en silencio el padre
-  impuesto por una cuota.
+  relaciones activas y grupos candidatos. Cada distribución se construye con
+  capacidad residual por grupo, demanda mínima y capacidad futura; no se
+  enumeran primero las composiciones débiles. La profundidad del solver depende
+  de las firmas y las alternativas acotadas, no de la cardinalidad de la tabla.
+  Se rechaza de forma estable cualquier combinación infactible; nunca se
+  sustituye en silencio el padre impuesto por una cuota.
 - Una tabla puente sin cuotas muestrea, sin reemplazo, índices del espacio de
   pares compatibles mediante un índice plano y `unrank`; no materializa todo el
   producto cartesiano. Si hay cuotas, cada grupo compatible se resuelve como
@@ -73,6 +75,6 @@ asignaciones que llegan a la validación estructural ya respetan las claves
 compuestas, RI, unicidad, `NULL` y cuotas; una contradicción de topología,
 cardinalidad o cuota produce un `GenerationError` que nombra la tabla y la
 causa. Las regresiones cubren máscaras de `NULL` independientes, componentes
-conexas, el solver a 1.200/10.000 filas, puentes uniformes y cuotas a ambos
-lados con un oráculo exhaustivo pequeño y sondas lineales 200/800/1.600/3.200,
-sin ampliar la API pública.
+conexas, el solver a 20/100/1.000 y 1.200/10.000 filas, puentes uniformes y
+cuotas a ambos lados con un oráculo exhaustivo pequeño y sondas lineales
+200/800/1.600/3.200, sin ampliar la API pública.

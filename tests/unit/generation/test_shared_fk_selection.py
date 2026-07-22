@@ -763,6 +763,132 @@ def test_global_component_solver_work_is_linear_at_10000_rows() -> None:
     assert large_work <= 200 * 10_000
 
 
+_VARIABLE_QUOTA_UNIQUE_SCHEMA = """
+CREATE TABLE quota_parents (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE unique_parents (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE quota_unique_children (
+    id INT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    quota_id INT,
+    unique_id INT NOT NULL,
+    FOREIGN KEY (tenant_id, quota_id) REFERENCES quota_parents(tenant_id, id),
+    FOREIGN KEY (tenant_id, unique_id) REFERENCES unique_parents(tenant_id, id)
+);
+"""
+
+
+def _variable_quota_unique_config(rows: int, seed: int, batch_size: int) -> Config:
+    return Config(
+        seed=seed,
+        tables={
+            "quota_parents": TableConfig(
+                rows=rows,
+                columns={"tenant_id": _seq(1), "id": _seq(10)},
+            ),
+            "unique_parents": TableConfig(
+                rows=rows,
+                columns={"tenant_id": _seq(1), "id": _seq(20)},
+            ),
+            "quota_unique_children": TableConfig(
+                rows=rows,
+                columns={"id": _seq(100)},
+                fk={
+                    "quota_id": FkQuota(strategy="quota", min=0, max=2, null_ratio=0.5),
+                    "unique_id": FkUniqueSubset(strategy="unique_subset"),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+def _variable_quota_unique_probe(
+    rows: int, *, seed: int, batch_size: int
+) -> tuple[int, int, Dataset]:
+    dataset = generate_dataset(
+        parse_ddl(_VARIABLE_QUOTA_UNIQUE_SCHEMA),
+        _variable_quota_unique_config(rows, seed, batch_size),
+    )
+    return (
+        engine._SELECTION_WORK.global_solver_work,
+        engine._SELECTION_WORK.global_solver_states,
+        dataset,
+    )
+
+
+def _assert_variable_quota_unique_contract(dataset: Dataset, rows: int) -> None:
+    assert dataset.quarantine == {}
+    children = dataset.tables["quota_unique_children"]
+    assert len(children) == rows
+    quota_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["quota_parents"]}
+    unique_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["unique_parents"]}
+    unique_counts = Counter((row["tenant_id"], row["unique_id"]) for row in children)
+    quota_counts = Counter(
+        (row["tenant_id"], row["quota_id"]) for row in children if row["quota_id"] is not None
+    )
+    assert {row["tenant_id"] for row in children} == set(range(1, rows + 1))
+    assert set(unique_counts) == unique_keys
+    assert all(count == 1 for count in unique_counts.values())
+    assert all((key in quota_keys) for key in quota_counts)
+    assert all(count <= 2 for count in quota_counts.values())
+    quota_non_null = sum(row["quota_id"] is not None for row in children)
+    assert rows // 4 <= quota_non_null <= (3 * rows + 3) // 4
+    for row in children:
+        assert (row["tenant_id"], row["unique_id"]) in unique_keys
+        if row["quota_id"] is not None:
+            assert (row["tenant_id"], row["quota_id"]) in quota_keys
+
+
+def test_nullable_quota_unique_subset_scales_with_tenants_and_rows() -> None:
+    """A bounded solver must not enumerate weak compositions before capacities."""
+    measurements: dict[int, dict[int, tuple[int, int]]] = {1: {}, 5000: {}}
+    digests: dict[int, dict[int, str]] = {1: {}, 5000: {}}
+    for batch_size in measurements:
+        for rows in (20, 100, 1000):
+            work, states, dataset = _variable_quota_unique_probe(
+                rows, seed=18, batch_size=batch_size
+            )
+            _assert_variable_quota_unique_contract(dataset, rows)
+            assert work > 0 and states > 0
+            measurements[batch_size][rows] = (work, states)
+            digests[batch_size][rows] = _digest(dataset)
+
+        assert measurements[batch_size][100][0] <= 8 * measurements[batch_size][20][0]
+        assert measurements[batch_size][1000][0] <= 60 * measurements[batch_size][20][0]
+        assert measurements[batch_size][100][1] <= 8 * measurements[batch_size][20][1]
+        assert measurements[batch_size][1000][1] <= 60 * measurements[batch_size][20][1]
+        assert measurements[batch_size][1000][0] <= 200 * 1000
+
+    assert all(digests[1][rows] == digests[5000][rows] for rows in (20, 100, 1000))
+
+
+def test_nullable_quota_unique_subset_infeasible_is_stable() -> None:
+    """A missing unique parent is rejected independently of seed and batching."""
+    messages: list[str] = []
+    for seed in range(8):
+        for batch_size in (1, 5000):
+            config = _variable_quota_unique_config(20, seed, batch_size)
+            config.tables["unique_parents"] = TableConfig(
+                rows=19,
+                columns={"tenant_id": _seq(1), "id": _seq(20)},
+            )
+            with pytest.raises(GenerationError, match="asignaci") as exc_info:
+                generate_dataset(parse_ddl(_VARIABLE_QUOTA_UNIQUE_SCHEMA), config)
+            messages.append(str(exc_info.value))
+
+    assert len(set(messages)) == 1
+    assert "quota_unique_children" in messages[0]
+    assert "unique_subset" in messages[0]
+
+
 _MIXED_QUOTA_UNIQUE_SCHEMA = """
 CREATE TABLE a (
     tenant_id INT NOT NULL,

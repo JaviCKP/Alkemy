@@ -560,7 +560,8 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     las relaciones obligatorias al rango de cada grupo, junto con las cotas
     agregadas de todas las cuotas; el solver global agrupa filas por firma de
     máscara activa y grupos candidatos y resuelve sus capacidades con un DP
-    iterativo cuya profundidad no depende del número de filas;
+    iterativo que aplica cotas residuales, demanda mínima y capacidad futura
+    durante la construcción, sin enumerar primero las composiciones débiles;
   - muestrea puentes uniformemente sin reemplazo por índice plano, sin
     materializar el producto cartesiano, y preserva cuotas de ambos lados con
     un b-matching exacto de grados acotados realizado por Havel–Hakimi, cuyo
@@ -570,7 +571,8 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   - añade regresiones para los tres bloqueantes de la revisión, componentes de
     cuotas independientes, nulabilidad, cuotas a ambos lados del puente,
     uniformidad 2×2, un oráculo exhaustivo completo para `L,R≤3`, regresiones
-    de 1.200/10.000 filas y cotas estructurales privadas lineales.
+    de 20/100/1.000 y 1.200/10.000 filas y cotas estructurales privadas
+    lineales.
 
 - Issue #44: las autorreferencias compuestas multi-tenant se generan por niveles
   usando `nullable_columns` bajo `MATCH SIMPLE`/`MATCH FULL`; las FKs no
