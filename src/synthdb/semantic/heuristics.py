@@ -173,6 +173,13 @@ def _identifier(_table: TableSpec, column: ColumnSpec) -> tuple[str, GeneratorSp
     return role, GeneratorSpec(type="sequence")
 
 
+def _build_codigo(_table: TableSpec, column: ColumnSpec) -> tuple[str, GeneratorSpec]:
+    """`codigo` usa una secuencia para enteros y una plantilla para texto."""
+    if column.type.kind == "integer":
+        return "codigo", GeneratorSpec(type="sequence")
+    return "codigo", GeneratorSpec(type="template")
+
+
 # --- El diccionario, del patrón más específico al más genérico -----------------
 # El ORDEN es contrato (se testea): un patrón anterior gana a uno posterior.
 
@@ -363,7 +370,7 @@ _PATTERNS: list[_Pattern] = [
         ),
         _TEXT_KINDS | frozenset({"integer"}),
         0.7,
-        _const("codigo", GeneratorSpec(type="template")),
+        _build_codigo,
     ),
     _Pattern(
         "edad",

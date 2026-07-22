@@ -37,6 +37,34 @@ def _digest(dataset: Dataset) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def test_integer_codigo_generation_is_deterministic_and_batch_independent() -> None:
+    spec = parse_ddl(
+        "CREATE TABLE inmobiliarias (id UUID PRIMARY KEY, siguiente_referencia INTEGER NOT NULL);"
+    )
+
+    def config(batch_size: int) -> Config:
+        return Config(
+            seed=42,
+            tables={"inmobiliarias": TableConfig(rows=10)},
+            output=OutputConfig(batch_size=batch_size),
+        )
+
+    first = generate_dataset(spec, config(1))
+    second = generate_dataset(spec, config(5000))
+    plan = next(table for table in first.table_plans.tables if table.table == "inmobiliarias")
+    column_plan = next(column for column in plan.columns if column.column == "siguiente_referencia")
+    values = [row["siguiente_referencia"] for row in first.tables["inmobiliarias"]]
+
+    assert column_plan.source == "heuristic"
+    assert column_plan.generator is not None
+    assert column_plan.generator.type == "sequence"
+    assert values == list(range(1, 11))
+    assert all(isinstance(value, int) and not isinstance(value, bool) for value in values)
+    assert first.tables == second.tables
+    assert first.quarantine == {}
+    assert second.quarantine == {}
+
+
 def test_simple_generation_is_independent_of_batch_size() -> None:
     spec = parse_ddl(
         "CREATE TABLE parent (id SERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE);"
