@@ -40,13 +40,22 @@ discriminador aún no existe cuando se construye la jerarquía.
   obligatorias); si `min > 0` y algún padre no lo es, o si los utilizables no
   alojan las filas, se rechaza con `GenerationError` que nombra la FK, la cuota
   y la incompatibilidad. Nunca se sustituye una asignación de cuota incompatible
-  por un padre aleatorio (eso incumpliría `min/max` en silencio). Una FK de
-  cuota compartida se procesa antes que las demás para que fije el discriminador.
-- La **tabla puente** deduplica reconsiderando el par completo: busca una
-  combinación válida (compatible por los valores compartidos) todavía sin usar,
-  no muta solo el índice derecho. Si se agotan las combinaciones válidas produce
-  `GenerationError` con la tabla, la cardinalidad solicitada y las combinaciones
-  disponibles.
+  por un padre aleatorio (eso incumpliría `min/max` en silencio).
+- **Varias cuotas compartidas se coordinan** por su discriminador común: cada
+  grupo (valor compartido) recibe un número de hijos factible *a la vez* para
+  todas las cuotas —la intersección de `[|padres_g|·min, |padres_g|·max]`— y
+  luego cada cuota reparte esos hijos entre sus padres del grupo. Prepararlas por
+  separado y solo priorizar una hacía que la segunda chocara con el tenant que la
+  primera fijaba; la coordinación resuelve toda asignación conjunta factible y,
+  cuando no existe, falla con un error que nombra tabla, relaciones, cuotas y el
+  grupo en conflicto.
+- La **tabla puente** deduplica reconsiderando el par completo (o cualquier
+  izquierda con cualquier derecha si no comparten columnas), pero consumiendo una
+  enumeración perezosa de combinaciones válidas con un cursor incremental: cada
+  combinación se inspecciona a lo sumo una vez en toda la tabla, sin reconstruir
+  el producto cartesiano por colisión ni materializarlo cuando se piden pocas
+  filas. Si se agotan las combinaciones válidas produce `GenerationError` con la
+  tabla, la cardinalidad solicitada y las combinaciones disponibles.
 - `InsertLeveledPhase` reutiliza esa selección para las FKs externas, fija el
   padre del nivel anterior antes de generar la fila y, en raíces
   `roots_point_to_self`, asigna la autorreferencia después de generar la PK y
@@ -61,6 +70,9 @@ La salida sigue siendo determinista por fila e independiente de
 solo las filas aceptadas. Los casos obligatorios sin combinación de padres
 válida —o una cuota o un puente sin combinaciones compatibles— dejan de
 producir `KeyError`, filas inválidas silenciosas o cuotas incumplidas y
-requieren corregir la cardinalidad/configuración del esquema. `engine.filter_scan_count()`
-expone el número de candidatos examinados para que una regresión verifique la
-cota lineal sin depender de un umbral temporal.
+requieren corregir la cardinalidad/configuración del esquema. Tanto el filtro de
+FKs obligatorias como la deduplicación del puente escalan de forma lineal en
+filas y padres. La medición de ese trabajo es **instrumentación privada de los
+tests** (`engine._SELECTION_WORK`, no una API pública): las regresiones de
+complejidad verifican una cota estructural sin comprometer una API ni depender de
+un umbral temporal frágil.

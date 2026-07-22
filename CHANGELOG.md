@@ -561,14 +561,35 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     las demás FKs obligatorias y falla de forma accionable si `min/max` no puede
     cumplirse, en vez de sustituir en silencio una asignación incompatible por un
     padre aleatorio. Una FK de cuota compartida se procesa antes que las demás.
-  - **Complejidad O(n²).** El filtrado de candidatos por las FKs obligatorias se
-    memoiza por los valores locales fijados y las proyecciones por columnas
-    compartidas se construyen una vez por tabla; el coste pasa a ser lineal en
-    filas y padres. `engine.filter_scan_count()` expone la métrica para una
-    regresión de complejidad no frágil.
+  - **Complejidad O(n²) del filtrado.** El filtrado de candidatos por las FKs
+    obligatorias se memoiza por los valores locales fijados y las proyecciones por
+    columnas compartidas se construyen una vez por tabla; el coste pasa a ser
+    lineal en filas y padres.
   - Nuevas regresiones de puente multi-tenant (semillas 1/4/5/10/11/12/18/19),
     cuota compatible e incompatible, contratos de `uniform`/`zipf`/`unique_subset`
     sobre FKs compartidas y escalado lineal, todas deterministas por `batch_size`.
+
+- Segunda revisión adversarial del PR #45 (dos bloqueantes sobre `d86e249`,
+  `generation/engine.py`):
+  - **Varias cuotas compartidas se coordinan.** Con dos FKs de cuota que comparten
+    un discriminador, preparar cada vector por separado y priorizar uno hacía que
+    el segundo chocara con el tenant que el primero fijaba, abortando en la mitad
+    de las semillas pese a existir una asignación conjunta. Ahora se reparte por
+    grupo compartido un número de hijos factible a la vez para todas las cuotas; si
+    no existe solución conjunta falla con un `GenerationError` que nombra tabla,
+    relaciones, cuotas y grupo.
+  - **Deduplicación del puente en tiempo lineal.** La deduplicación ya no
+    reconstruye todas las combinaciones compatibles por cada colisión: consume una
+    enumeración perezosa con un cursor incremental que inspecciona cada combinación
+    a lo sumo una vez, sin materializar el producto cartesiano. El puente
+    multi-tenant alineado pasa de ~cuadrático (6400 filas en ~7,9 s) a lineal
+    (~1,4 s), con trabajo estructural ≈ n.
+  - El contador de complejidad deja de ser una API pública (`filter_scan_count()`)
+    y pasa a ser instrumentación privada de los tests (`engine._SELECTION_WORK`),
+    que ahora cubre también el trabajo de la deduplicación del puente.
+  - Nuevas regresiones: dos cuotas compartidas exactas sobre 20 semillas ×
+    `batch_size`, caso conjunto infactible accionable, `null_ratio` sobre FK
+    compartida anulable y cota estructural lineal de la deduplicación del puente.
 
 - Issue #44: las autorreferencias compuestas multi-tenant se generan por niveles
   usando `nullable_columns` bajo `MATCH SIMPLE`/`MATCH FULL`; las FKs no

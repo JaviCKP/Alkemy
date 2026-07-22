@@ -28,6 +28,7 @@ from synthdb.config.models import (
     ColumnConfig,
     Config,
     FkQuota,
+    FkUniform,
     FkUniqueSubset,
     FkZipf,
     OutputConfig,
@@ -291,7 +292,8 @@ def _probe(n: int) -> tuple[int, Dataset]:
         },
     )
     dataset = generate_dataset(spec, config)
-    return engine.filter_scan_count(), dataset
+    # `_SELECTION_WORK` es instrumentación privada de tests (no API pública de engine).
+    return engine._SELECTION_WORK.filter_scans, dataset
 
 
 def test_shared_fk_selection_scales_linearly() -> None:
@@ -307,3 +309,209 @@ def test_shared_fk_selection_scales_linearly() -> None:
     # Cota lineal absoluta (holgada) y de crecimiento: O(n²) la rompe con claridad.
     assert scans_big <= 40 * 800
     assert scans_big <= 8 * scans_small
+
+
+# --- Bloqueante 1 (revisión de d86e249): dos cuotas compartidas coordinadas ----
+
+_TWO_QUOTA_SCHEMA = """
+CREATE TABLE a (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE b (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE c (
+    id INT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    a_id INT NOT NULL,
+    b_id INT NOT NULL,
+    FOREIGN KEY (tenant_id, a_id) REFERENCES a(tenant_id, id),
+    FOREIGN KEY (tenant_id, b_id) REFERENCES b(tenant_id, id)
+);
+"""
+
+
+def _two_quota_config(seed: int, batch_size: int) -> Config:
+    quota = FkQuota(strategy="quota", min=1, max=1)
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+            "b": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(20)}),
+            "c": TableConfig(
+                rows=2,
+                columns={"id": _seq(100)},
+                fk={"a_id": quota, "b_id": quota},
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+@pytest.mark.parametrize("seed", list(range(20)))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_two_shared_quotas_are_jointly_satisfied(seed: int, batch_size: int) -> None:
+    # Dos FKs compuestas que comparten tenant_id, ambas quota(min=1,max=1), un
+    # padre por tenant en cada lado y dos hijos: la solución conjunta existe (cada
+    # padre recibe exactamente un hijo). Con d86e249 falla en la mitad de las
+    # semillas porque cada vector de cuota se barajaba por separado.
+    dataset = generate_dataset(parse_ddl(_TWO_QUOTA_SCHEMA), _two_quota_config(seed, batch_size))
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["c"]
+    assert len(rows) == 2
+    a_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["a"]}
+    b_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["b"]}
+    for row in rows:
+        assert (row["tenant_id"], row["a_id"]) in a_keys  # RI FK a
+        assert (row["tenant_id"], row["b_id"]) in b_keys  # RI FK b
+    a_counts = Counter((row["tenant_id"], row["a_id"]) for row in rows)
+    b_counts = Counter((row["tenant_id"], row["b_id"]) for row in rows)
+    # Conteo exacto: cada padre de ambas tablas recibe exactamente un hijo.
+    assert dict(a_counts) == {(1, 10): 1, (2, 11): 1}
+    assert dict(b_counts) == {(1, 20): 1, (2, 21): 1}
+
+
+def test_two_shared_quotas_determinism_across_batch_size() -> None:
+    spec = parse_ddl(_TWO_QUOTA_SCHEMA)
+    small = generate_dataset(spec, _two_quota_config(seed=4, batch_size=1))
+    large = generate_dataset(spec, _two_quota_config(seed=4, batch_size=5000))
+    assert _digest(small) == _digest(large)
+
+
+def test_two_shared_quotas_truly_infeasible_fails_actionably() -> None:
+    # `a` tiene padres para los tenants 1 y 2; `b` solo para el tenant 1. Con
+    # ambas quota(min=1,max=1) el padre de `a` del tenant 2 exige un hijo que
+    # ninguna asignación conjunta puede darle (no hay `b` para el tenant 2).
+    spec = parse_ddl(_TWO_QUOTA_SCHEMA)
+    quota = FkQuota(strategy="quota", min=1, max=1)
+    config = Config(
+        seed=0,
+        tables={
+            "a": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+            "b": TableConfig(
+                rows=1,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [1]}),
+                    "id": _seq(20),
+                },
+            ),
+            "c": TableConfig(rows=2, columns={"id": _seq(100)}, fk={"a_id": quota, "b_id": quota}),
+        },
+    )
+    with pytest.raises(GenerationError, match=r"tabla c.*cuota"):
+        generate_dataset(spec, config)
+
+
+def test_nullable_shared_fk_with_null_ratio_keeps_its_contract() -> None:
+    # `null_ratio` sobre una FK compartida anulable: unas filas quedan a NULL en
+    # esa relación sin romper el tenant compartido ni la otra FK obligatoria.
+    spec = parse_ddl(
+        """
+        CREATE TABLE operations (
+            tenant_id INT NOT NULL, id INT NOT NULL, PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE customers (
+            tenant_id INT NOT NULL, id INT NOT NULL, PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE ops_children (
+            id INT PRIMARY KEY,
+            tenant_id INT NOT NULL,
+            operation_id INT NOT NULL,
+            customer_id INT,
+            FOREIGN KEY (tenant_id, operation_id) REFERENCES operations(tenant_id, id),
+            FOREIGN KEY (tenant_id, customer_id) REFERENCES customers(tenant_id, id)
+        );
+        """
+    )
+
+    def config(batch_size: int) -> Config:
+        return Config(
+            seed=7,
+            tables={
+                "operations": TableConfig(rows=4, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+                "customers": TableConfig(rows=4, columns={"tenant_id": _seq(1), "id": _seq(20)}),
+                "ops_children": TableConfig(
+                    rows=40,
+                    columns={"id": _seq(100)},
+                    fk={"customer_id": FkUniform(strategy="uniform", null_ratio=0.5)},
+                ),
+            },
+            output=OutputConfig(batch_size=batch_size),
+        )
+
+    small = generate_dataset(spec, config(1))
+    large = generate_dataset(spec, config(5000))
+    assert small.quarantine == {}
+    operation_keys = {(row["tenant_id"], row["id"]) for row in small.tables["operations"]}
+    customer_keys = {(row["tenant_id"], row["id"]) for row in small.tables["customers"]}
+    rows = small.tables["ops_children"]
+    assert any(row["customer_id"] is None for row in rows)  # null_ratio surtió efecto
+    assert any(row["customer_id"] is not None for row in rows)
+    for row in rows:
+        assert (row["tenant_id"], row["operation_id"]) in operation_keys  # obligatoria intacta
+        if row["customer_id"] is not None:
+            assert (row["tenant_id"], row["customer_id"]) in customer_keys  # tenant coherente
+    assert _digest(small) == _digest(large)
+
+
+# --- Bloqueante 2 (revisión de d86e249): coste de la deduplicación del puente --
+
+_BRIDGE_PROBE_SCHEMA = """
+CREATE TABLE lefts (
+    tenant_id INT NOT NULL, id INT NOT NULL, PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE rights (
+    tenant_id INT NOT NULL, id INT NOT NULL, PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE links (
+    tenant_id INT NOT NULL,
+    left_id INT NOT NULL,
+    right_id INT NOT NULL,
+    PRIMARY KEY (tenant_id, left_id, right_id),
+    FOREIGN KEY (tenant_id, left_id) REFERENCES lefts(tenant_id, id),
+    FOREIGN KEY (tenant_id, right_id) REFERENCES rights(tenant_id, id)
+);
+"""
+
+
+def _bridge_probe(n: int) -> tuple[int, Dataset]:
+    spec = parse_ddl(_BRIDGE_PROBE_SCHEMA)
+    config = Config(
+        seed=1,
+        tables={
+            "lefts": TableConfig(rows=n, columns={"tenant_id": _seq(1), "id": _seq(1)}),
+            "rights": TableConfig(rows=n, columns={"tenant_id": _seq(1), "id": _seq(1)}),
+            "links": TableConfig(rows=n),
+        },
+    )
+    dataset = generate_dataset(spec, config)
+    return engine._SELECTION_WORK.bridge_pairs_examined, dataset
+
+
+def test_bridge_dedup_scales_linearly() -> None:
+    # Puente multi-tenant alineado (un padre por lado y tenant, `links=n`): la
+    # deduplicación no puede reconstruir el producto cartesiano por cada colisión.
+    # El trabajo estructural (pares examinados por la deduplicación) debe crecer
+    # lineal; un O(n²) al cuadruplicar n lo multiplica por ~16.
+    work_small, ds_small = _bridge_probe(800)
+    work_big, ds_big = _bridge_probe(3200)
+
+    for dataset in (ds_small, ds_big):
+        assert dataset.quarantine == {}
+        links = dataset.tables["links"]
+        pairs = {(row["left_id"], row["right_id"]) for row in links}
+        assert len(pairs) == len(links)  # pares únicos
+        left_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["lefts"]}
+        right_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["rights"]}
+        for row in links:
+            assert (row["tenant_id"], row["left_id"]) in left_keys
+            assert (row["tenant_id"], row["right_id"]) in right_keys
+    assert work_small > 0
+    # 4× n ⇒ ~4× trabajo (lineal). Cota holgada que un O(n²) (~16×) rompe.
+    assert work_big <= 8 * work_small
+    assert work_big <= 40 * 3200
