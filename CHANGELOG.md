@@ -548,6 +548,14 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- Issue #46: la heurística `codigo` selecciona `sequence` para columnas
+  `INTEGER` y conserva `template` para tipos textuales. El fusor comprueba las
+  propuestas heurísticas contra el `TypeSpec`: una incompatibilidad cae al
+  `fallback` seguro con un aviso que identifica tabla, columna, generador y
+  tipo. Las elecciones explícitas del YAML y la prioridad usuario > IR >
+  heurística > fallback no cambian. El dry-run integral del schema inmobiliario
+  real queda bloqueado por el defecto independiente registrado en #47.
+
 - PR #45 — refactor de la selección de FKs compuestas compartidas en un
   `TableAssigner` privado (`generation/_table_assignment.py`), sin tocar la IR
   ni los generadores:

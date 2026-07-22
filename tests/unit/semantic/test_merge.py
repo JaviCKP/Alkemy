@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import synthdb.semantic.merge as merge_module
 from synthdb.config.loader import ConfigError, load_config
 from synthdb.config.models import (
     ColumnConfig,
@@ -23,8 +24,9 @@ from synthdb.config.models import (
 )
 from synthdb.constraints.check_interp import interpret_checks
 from synthdb.ir.plans import ColumnPlan, TablePlans
-from synthdb.ir.schema import canonical_json
+from synthdb.ir.schema import GeneratorSpec, canonical_json
 from synthdb.parsing.ddl import parse_ddl
+from synthdb.semantic.heuristics import HeuristicResult
 from synthdb.semantic.merge import PlanError, build_plan
 
 _SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
@@ -43,6 +45,62 @@ def _plan_schema(name: str, config: Config | None = None) -> TablePlans:
 def _column(plan: TablePlans, table: str, column: str) -> ColumnPlan:
     table_plan = next(t for t in plan.tables if t.table == table)
     return next(c for c in table_plan.columns if c.column == column)
+
+
+def test_integer_codigo_usa_sequence_y_conserva_source_heuristic() -> None:
+    plan = _plan(
+        "CREATE TABLE inmobiliarias (id UUID PRIMARY KEY, siguiente_referencia INTEGER NOT NULL);"
+    )
+
+    cp = _column(plan, "inmobiliarias", "siguiente_referencia")
+    assert cp.source == "heuristic"
+    assert cp.generator is not None
+    assert cp.generator.type == "sequence"
+
+
+def test_heuristica_incompatible_cae_a_fallback_con_aviso_accionable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_infer(_table: object, _column: object) -> HeuristicResult:
+        return HeuristicResult(
+            role="codigo",
+            generator=GeneratorSpec(type="template"),
+            confidence=0.95,
+        )
+
+    monkeypatch.setattr(merge_module, "infer_column", fake_infer)
+    plan = _plan("CREATE TABLE inmobiliarias (siguiente_referencia INTEGER NOT NULL);")
+
+    cp = _column(plan, "inmobiliarias", "siguiente_referencia")
+    assert cp.source == "fallback"
+    assert cp.generator is not None
+    assert cp.generator.type == "fallback"
+    assert cp.role == "codigo"
+    assert any(
+        "inmobiliarias.siguiente_referencia" in warning
+        and "template" in warning
+        and "integer" in warning
+        and "incompatible" in warning
+        for warning in cp.warnings
+    )
+
+
+def test_usuario_explicito_no_se_rebaja_por_defensa_heuristica() -> None:
+    plan = _plan(
+        "CREATE TABLE inmobiliarias (siguiente_referencia INTEGER NOT NULL);",
+        Config(
+            tables={
+                "inmobiliarias": TableConfig(
+                    columns={"siguiente_referencia": ColumnConfig(generator="template")}
+                )
+            }
+        ),
+    )
+
+    cp = _column(plan, "inmobiliarias", "siguiente_referencia")
+    assert cp.source == "user"
+    assert cp.generator is not None
+    assert cp.generator.type == "template"
 
 
 # --- 1. Usuario: manda, pero se valida contra la IR ---------------------------

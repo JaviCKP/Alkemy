@@ -219,6 +219,30 @@ def test_tipo_incompatible_no_casa() -> None:
     assert _in("personas", _column("edad", "text")) is None
 
 
+@pytest.mark.parametrize(
+    "name", ["codigo", "referencia", "siguiente_referencia", "serial", "folio"]
+)
+def test_codigo_integer_usa_sequence(name: str) -> None:
+    result = _in("inmobiliarias", _column(name, "integer"))
+
+    assert result is not None
+    assert result.role == "codigo"
+    assert result.generator.type == "sequence"
+
+
+@pytest.mark.parametrize("kind", ["text", "varchar"])
+@pytest.mark.parametrize(
+    "name", ["codigo", "referencia", "siguiente_referencia", "serial", "folio"]
+)
+def test_codigo_textual_sigue_usando_template(name: str, kind: str) -> None:
+    type_kwargs = {"length": 50} if kind == "varchar" else {}
+    result = _in("inmobiliarias", _column(name, kind, **type_kwargs))
+
+    assert result is not None
+    assert result.role == "codigo"
+    assert result.generator.type == "template"
+
+
 def test_password_nunca_es_faker() -> None:
     """`password`/`hash` producen un marcador inerte, jamás un valor de Faker (privacidad)."""
     for name in ("password", "passwd", "user_hash", "api_key"):

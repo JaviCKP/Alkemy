@@ -43,6 +43,15 @@ from synthdb.ir.schema import ColumnSpec, GeneratorSpec, SchemaSpec, TableSpec
 from synthdb.semantic.heuristics import infer_column
 
 _RANGE_GENERATORS = frozenset({"numeric_range", "datetime_range"})
+_TEXTUAL_KINDS = frozenset({"text", "varchar", "char"})
+_HEURISTIC_GENERATOR_KINDS = {
+    "faker": _TEXTUAL_KINDS,
+    "template": _TEXTUAL_KINDS,
+    "numeric_range": frozenset({"integer", "numeric"}),
+    "sequence": frozenset({"integer"}),
+    "datetime_range": frozenset({"date", "timestamp"}),
+    "uuid": frozenset({"uuid"}),
+}
 
 
 class PlanError(ValueError):
@@ -119,8 +128,18 @@ def _plan_column(
         heuristic = infer_column(table, column)
         min_confidence = config.llm.min_confidence
         if heuristic is not None and heuristic.confidence >= min_confidence:
-            generator = heuristic.generator
-            source, confidence, role = "heuristic", heuristic.confidence, heuristic.role
+            if _heuristic_generator_compatible(heuristic.generator, column):
+                generator = heuristic.generator
+                source, confidence, role = "heuristic", heuristic.confidence, heuristic.role
+            else:
+                generator = GeneratorSpec(type="fallback")
+                source, confidence, role = "fallback", 0.0, heuristic.role
+                warnings.append(
+                    f"{ctx}: la heuristica '{heuristic.role}' propone el generador "
+                    f"'{heuristic.generator.type}', incompatible con el tipo IR "
+                    f"'{column.type.kind}'; se usa el generador 'fallback' seguro por tipo. "
+                    "Revisa el patron o fija un generador explicito en el YAML."
+                )
         else:
             generator = GeneratorSpec(type="fallback")
             source, confidence, role = "fallback", 0.0, (heuristic.role if heuristic else None)
@@ -159,6 +178,39 @@ def _plan_column(
         role=role,
         warnings=warnings,
     )
+
+
+def _heuristic_generator_compatible(generator: GeneratorSpec, column: ColumnSpec) -> bool:
+    """Comprueba que una propuesta heuristica puede producir el tipo de la IR.
+
+    Esta defensa solo se usa despues de seleccionar una heuristica. Las elecciones
+    explicitas del YAML no pasan por aqui: su politica de validacion es deliberadamente
+    independiente y queda fuera del alcance de esta issue.
+    """
+    if generator.type == "fallback":
+        return True
+    if generator.type == "choice":
+        return _choice_generator_compatible(generator, column)
+    return column.type.kind in _HEURISTIC_GENERATOR_KINDS.get(generator.type, frozenset())
+
+
+def _choice_generator_compatible(generator: GeneratorSpec, column: ColumnSpec) -> bool:
+    """Comprueba el tipo de todos los valores de un `choice` heuristico."""
+    values = generator.params.get("values")
+    if not isinstance(values, list) or not values:
+        return False
+    kind = column.type.kind
+    if kind == "boolean":
+        return all(isinstance(value, bool) for value in values)
+    if kind == "integer":
+        return all(isinstance(value, int) and not isinstance(value, bool) for value in values)
+    if kind == "numeric":
+        return all(
+            isinstance(value, int | float) and not isinstance(value, bool) for value in values
+        )
+    if kind in _TEXTUAL_KINDS:
+        return all(isinstance(value, str) for value in values)
+    return False
 
 
 def _db_managed_plan(column: ColumnSpec) -> ColumnPlan:
