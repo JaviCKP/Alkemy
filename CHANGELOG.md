@@ -548,48 +548,21 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
-- Revisión adversarial del PR #45 sobre el selector de FKs compartidas
-  (`generation/engine.py`), sin tocar la IR ni los generadores:
-  - **Puente multi-tenant.** La deduplicación de una tabla puente reconsidera el
-    par completo: busca una combinación válida (compatible por los valores
-    compartidos) todavía sin usar en lugar de mutar solo el índice derecho, que
-    podía elegir otro tenant y abortar la generación. Al agotarse las
-    combinaciones válidas produce un `GenerationError` con la tabla, la
-    cardinalidad solicitada y las combinaciones disponibles.
-  - **Cuota compartida.** La cuota es un contrato de tabla: sobre FKs que
-    comparten columnas se reparte solo entre padres con combinación compatible en
-    las demás FKs obligatorias y falla de forma accionable si `min/max` no puede
-    cumplirse, en vez de sustituir en silencio una asignación incompatible por un
-    padre aleatorio. Una FK de cuota compartida se procesa antes que las demás.
-  - **Complejidad O(n²) del filtrado.** El filtrado de candidatos por las FKs
-    obligatorias se memoiza por los valores locales fijados y las proyecciones por
-    columnas compartidas se construyen una vez por tabla; el coste pasa a ser
-    lineal en filas y padres.
-  - Nuevas regresiones de puente multi-tenant (semillas 1/4/5/10/11/12/18/19),
-    cuota compatible e incompatible, contratos de `uniform`/`zipf`/`unique_subset`
-    sobre FKs compartidas y escalado lineal, todas deterministas por `batch_size`.
-
-- Segunda revisión adversarial del PR #45 (dos bloqueantes sobre `d86e249`,
-  `generation/engine.py`):
-  - **Varias cuotas compartidas se coordinan.** Con dos FKs de cuota que comparten
-    un discriminador, preparar cada vector por separado y priorizar uno hacía que
-    el segundo chocara con el tenant que el primero fijaba, abortando en la mitad
-    de las semillas pese a existir una asignación conjunta. Ahora se reparte por
-    grupo compartido un número de hijos factible a la vez para todas las cuotas; si
-    no existe solución conjunta falla con un `GenerationError` que nombra tabla,
-    relaciones, cuotas y grupo.
-  - **Deduplicación del puente en tiempo lineal.** La deduplicación ya no
-    reconstruye todas las combinaciones compatibles por cada colisión: consume una
-    enumeración perezosa con un cursor incremental que inspecciona cada combinación
-    a lo sumo una vez, sin materializar el producto cartesiano. El puente
-    multi-tenant alineado pasa de ~cuadrático (6400 filas en ~7,9 s) a lineal
-    (~1,4 s), con trabajo estructural ≈ n.
-  - El contador de complejidad deja de ser una API pública (`filter_scan_count()`)
-    y pasa a ser instrumentación privada de los tests (`engine._SELECTION_WORK`),
-    que ahora cubre también el trabajo de la deduplicación del puente.
-  - Nuevas regresiones: dos cuotas compartidas exactas sobre 20 semillas ×
-    `batch_size`, caso conjunto infactible accionable, `null_ratio` sobre FK
-    compartida anulable y cota estructural lineal de la deduplicación del puente.
+- PR #45 — refactor de la selección de FKs compuestas compartidas en un
+  `TableAssigner` privado (`generation/_table_assignment.py`), sin tocar la IR
+  ni los generadores:
+  - coordina por componentes conexas, conserva discriminadores compartidos y
+    decide una asignación conjunta válida antes de generar filas;
+  - permite máscaras y `null_ratio` independientes para FKs anulables bajo
+    `MATCH SIMPLE`, contando cada cuota solo en sus filas no nulas;
+  - muestrea puentes uniformemente sin reemplazo por índice plano, sin
+    materializar el producto cartesiano, y preserva cuotas de ambos lados con
+    un emparejamiento de grados;
+  - mantiene semillas jerárquicas, determinismo por `batch_size`, RI, unicidad y
+    errores accionables para topologías o cuotas infactibles;
+  - añade regresiones para los tres bloqueantes de la revisión, componentes de
+    cuotas independientes, nulabilidad, cuotas a ambos lados del puente,
+    uniformidad 2×2 y cotas estructurales privadas lineales.
 
 - Issue #44: las autorreferencias compuestas multi-tenant se generan por niveles
   usando `nullable_columns` bajo `MATCH SIMPLE`/`MATCH FULL`; las FKs no

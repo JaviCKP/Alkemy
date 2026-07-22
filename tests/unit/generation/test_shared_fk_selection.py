@@ -3,14 +3,14 @@
 Cubre los tres hallazgos publicados sobre la selección coordinada de FKs que
 comparten columnas (típicamente un discriminador ``tenant_id``):
 
-1. **Puente multi-tenant.** La deduplicación de una tabla puente no puede
-   sustituir un índice aislado: debe buscar un par completo compatible con los
+1. **Puente multi-tenant.** La asignación de una tabla puente no puede
+   sustituir un índice aislado: debe construir un par completo compatible con los
    valores compartidos, o fallar de forma accionable.
 2. **Cuota incumplida en silencio.** Una asignación de cuota incompatible con
    las FKs compartidas no puede reemplazarse por un padre aleatorio: se reasigna
    de forma determinista si cabe en ``min/max`` o se falla con error accionable.
-3. **Complejidad O(n²).** El filtrado de candidatos por las FKs obligatorias
-   restantes no puede recorrer todos los padres por cada fila hija.
+3. **Complejidad O(n²).** La asignación conjunta y sus índices de soporte no
+   pueden recorrer todos los padres por cada fila hija.
 
 Los esquemas se declaran en línea (como en ``test_engine.py``) para no depender
 de fixtures nuevos ni de snapshots.
@@ -87,7 +87,7 @@ def _bridge_config(seed: int, batch_size: int, links_rows: int = 2) -> Config:
 
 
 @pytest.mark.parametrize("seed", [1, 4, 5, 10, 11, 12, 18, 19])
-def test_multitenant_bridge_dedup_keeps_shared_tenant(seed: int) -> None:
+def test_multitenant_bridge_assignment_keeps_shared_tenant(seed: int) -> None:
     spec = parse_ddl(_BRIDGE_SCHEMA)
     small = generate_dataset(spec, _bridge_config(seed, batch_size=1))
     large = generate_dataset(spec, _bridge_config(seed, batch_size=5000))
@@ -459,7 +459,7 @@ def test_nullable_shared_fk_with_null_ratio_keeps_its_contract() -> None:
     assert _digest(small) == _digest(large)
 
 
-# --- Bloqueante 2 (revisión de d86e249): coste de la deduplicación del puente --
+# --- Bloqueante 2 (revisión de d86e249): coste de la asignación del puente ---
 
 _BRIDGE_PROBE_SCHEMA = """
 CREATE TABLE lefts (
@@ -493,10 +493,10 @@ def _bridge_probe(n: int) -> tuple[int, Dataset]:
     return engine._SELECTION_WORK.bridge_pairs_examined, dataset
 
 
-def test_bridge_dedup_scales_linearly() -> None:
+def test_bridge_assignment_scales_linearly() -> None:
     # Puente multi-tenant alineado (un padre por lado y tenant, `links=n`): la
-    # deduplicación no puede reconstruir el producto cartesiano por cada colisión.
-    # El trabajo estructural (pares examinados por la deduplicación) debe crecer
+    # asignación no puede reconstruir el producto cartesiano por cada colisión.
+    # El trabajo estructural (pares examinados por el asignador) debe crecer
     # lineal; un O(n²) al cuadruplicar n lo multiplica por ~16.
     work_small, ds_small = _bridge_probe(800)
     work_big, ds_big = _bridge_probe(3200)
@@ -515,3 +515,316 @@ def test_bridge_dedup_scales_linearly() -> None:
     # 4× n ⇒ ~4× trabajo (lineal). Cota holgada que un O(n²) (~16×) rompe.
     assert work_big <= 8 * work_small
     assert work_big <= 40 * 3200
+
+
+# --- Revisión adversarial de 17e660b: asignación conjunta de tabla ------------
+
+_NULLABLE_TWO_QUOTA_SCHEMA = """
+CREATE TABLE a (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE b (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE c (
+    id INT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    a_id INT,
+    b_id INT,
+    FOREIGN KEY (tenant_id, a_id) REFERENCES a(tenant_id, id),
+    FOREIGN KEY (tenant_id, b_id) REFERENCES b(tenant_id, id)
+);
+"""
+
+
+def _nullable_two_quota_config(
+    seed: int,
+    batch_size: int,
+    *,
+    a_null_ratio: float = 0.5,
+    b_null_ratio: float = 0.5,
+) -> Config:
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+            "b": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(20)}),
+            "c": TableConfig(
+                rows=20,
+                columns={"id": _seq(100)},
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=0, max=20, null_ratio=a_null_ratio),
+                    "b_id": FkQuota(strategy="quota", min=0, max=20, null_ratio=b_null_ratio),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+@pytest.mark.parametrize("seed", range(5))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_nullable_shared_quotas_allow_independent_null_patterns(seed: int, batch_size: int) -> None:
+    spec = parse_ddl(_NULLABLE_TWO_QUOTA_SCHEMA)
+    dataset = generate_dataset(spec, _nullable_two_quota_config(seed, batch_size))
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["c"]
+    a_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["a"]}
+    b_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["b"]}
+    a_counts = Counter((row["tenant_id"], row["a_id"]) for row in rows if row["a_id"] is not None)
+    b_counts = Counter((row["tenant_id"], row["b_id"]) for row in rows if row["b_id"] is not None)
+
+    assert len(rows) == 20
+    assert any((row["a_id"] is None) != (row["b_id"] is None) for row in rows)
+    assert sum(a_counts.values()) == sum(row["a_id"] is not None for row in rows)
+    assert sum(b_counts.values()) == sum(row["b_id"] is not None for row in rows)
+    assert all(count <= 20 for count in a_counts.values())
+    assert all(count <= 20 for count in b_counts.values())
+    for row in rows:
+        assert row["tenant_id"] is not None
+        if row["a_id"] is not None:
+            assert (row["tenant_id"], row["a_id"]) in a_keys
+        if row["b_id"] is not None:
+            assert (row["tenant_id"], row["b_id"]) in b_keys
+
+
+def test_nullable_shared_quotas_can_have_different_null_ratios() -> None:
+    spec = parse_ddl(_NULLABLE_TWO_QUOTA_SCHEMA)
+    dataset = generate_dataset(
+        spec,
+        _nullable_two_quota_config(seed=0, batch_size=5000, a_null_ratio=0.0, b_null_ratio=1.0),
+    )
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["c"]
+    assert all(row["a_id"] is not None for row in rows)
+    assert all(row["b_id"] is None for row in rows)
+    assert {row["tenant_id"] for row in rows} == {1, 2}
+
+
+_COMPONENT_QUOTA_SCHEMA = """
+CREATE TABLE a (
+    x INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (x, id)
+);
+CREATE TABLE b (
+    x INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (x, id)
+);
+CREATE TABLE d (
+    y INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (y, id)
+);
+CREATE TABLE e (
+    y INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (y, id)
+);
+CREATE TABLE c (
+    id INT PRIMARY KEY,
+    x INT NOT NULL,
+    a_id INT NOT NULL,
+    b_id INT NOT NULL,
+    y INT NOT NULL,
+    d_id INT NOT NULL,
+    e_id INT NOT NULL,
+    FOREIGN KEY (x, a_id) REFERENCES a(x, id),
+    FOREIGN KEY (x, b_id) REFERENCES b(x, id),
+    FOREIGN KEY (y, d_id) REFERENCES d(y, id),
+    FOREIGN KEY (y, e_id) REFERENCES e(y, id)
+);
+"""
+
+
+def _component_quota_config(seed: int, batch_size: int) -> Config:
+    quota = FkQuota(strategy="quota", min=1, max=1)
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"x": _seq(1), "id": _seq(10)}),
+            "b": TableConfig(rows=2, columns={"x": _seq(1), "id": _seq(20)}),
+            "d": TableConfig(rows=2, columns={"y": _seq(1), "id": _seq(30)}),
+            "e": TableConfig(rows=2, columns={"y": _seq(1), "id": _seq(40)}),
+            "c": TableConfig(
+                rows=2,
+                columns={"id": _seq(100)},
+                fk={"a_id": quota, "b_id": quota, "d_id": quota, "e_id": quota},
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_shared_quota_components_are_coordinated_independently(seed: int) -> None:
+    spec = parse_ddl(_COMPONENT_QUOTA_SCHEMA)
+    small = generate_dataset(spec, _component_quota_config(seed, batch_size=1))
+    large = generate_dataset(spec, _component_quota_config(seed, batch_size=5000))
+
+    for dataset in (small, large):
+        assert dataset.quarantine == {}
+        rows = dataset.tables["c"]
+        assert len(rows) == 2
+        assert Counter((row["x"], row["a_id"]) for row in rows) == {
+            (1, 10): 1,
+            (2, 11): 1,
+        }
+        assert Counter((row["x"], row["b_id"]) for row in rows) == {
+            (1, 20): 1,
+            (2, 21): 1,
+        }
+        assert Counter((row["y"], row["d_id"]) for row in rows) == {
+            (1, 30): 1,
+            (2, 31): 1,
+        }
+        assert Counter((row["y"], row["e_id"]) for row in rows) == {
+            (1, 40): 1,
+            (2, 41): 1,
+        }
+    assert _digest(small) == _digest(large)
+
+
+_BRIDGE_QUOTA_SCHEMA = """
+CREATE TABLE a (id INT PRIMARY KEY);
+CREATE TABLE b (id INT PRIMARY KEY);
+CREATE TABLE x (
+    a_id INT NOT NULL,
+    b_id INT NOT NULL,
+    PRIMARY KEY (a_id, b_id),
+    FOREIGN KEY (a_id) REFERENCES a(id),
+    FOREIGN KEY (b_id) REFERENCES b(id)
+);
+"""
+
+
+def _bridge_quota_config(seed: int, batch_size: int) -> Config:
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"id": _seq(1)}),
+            "b": TableConfig(rows=3, columns={"id": _seq(10)}),
+            "x": TableConfig(
+                rows=4,
+                fk={"a_id": FkQuota(strategy="quota", min=2, max=2)},
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_bridge_assigner_preserves_quota_and_pair_uniqueness(seed: int) -> None:
+    spec = parse_ddl(_BRIDGE_QUOTA_SCHEMA)
+    small = generate_dataset(spec, _bridge_quota_config(seed, batch_size=1))
+    large = generate_dataset(spec, _bridge_quota_config(seed, batch_size=5000))
+
+    for dataset in (small, large):
+        assert dataset.quarantine == {}
+        rows = dataset.tables["x"]
+        assert Counter(row["a_id"] for row in rows) == {1: 2, 2: 2}
+        assert len({(row["a_id"], row["b_id"]) for row in rows}) == 4
+    assert _digest(small) == _digest(large)
+
+
+def _bridge_both_quota_config(seed: int, batch_size: int) -> Config:
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"id": _seq(1)}),
+            "b": TableConfig(rows=3, columns={"id": _seq(10)}),
+            "x": TableConfig(
+                rows=4,
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=2, max=2),
+                    "b_id": FkQuota(strategy="quota", min=1, max=2),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_bridge_assigner_satisfies_quotas_on_both_sides(seed: int) -> None:
+    spec = parse_ddl(_BRIDGE_QUOTA_SCHEMA)
+    small = generate_dataset(spec, _bridge_both_quota_config(seed, batch_size=1))
+    large = generate_dataset(spec, _bridge_both_quota_config(seed, batch_size=5000))
+
+    for dataset in (small, large):
+        assert dataset.quarantine == {}
+        rows = dataset.tables["x"]
+        assert Counter(row["a_id"] for row in rows) == {1: 2, 2: 2}
+        b_counts = Counter(row["b_id"] for row in rows)
+        assert set(b_counts) == {10, 11, 12}
+        assert all(1 <= count <= 2 for count in b_counts.values())
+        assert len({(row["a_id"], row["b_id"]) for row in rows}) == 4
+    assert _digest(small) == _digest(large)
+
+
+def test_bridge_assigner_rejects_incompatible_quotas_deterministically() -> None:
+    spec = parse_ddl(_BRIDGE_QUOTA_SCHEMA)
+    config = Config(
+        seed=0,
+        tables={
+            "a": TableConfig(rows=2, columns={"id": _seq(1)}),
+            "b": TableConfig(rows=3, columns={"id": _seq(10)}),
+            "x": TableConfig(
+                rows=4,
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=2, max=2),
+                    "b_id": FkQuota(strategy="quota", min=2, max=2),
+                },
+            ),
+        },
+    )
+
+    messages: list[str] = []
+    for seed in range(3):
+        with pytest.raises(GenerationError, match=r"tabla puente x.*cuotas") as exc_info:
+            generate_dataset(spec, config.model_copy(update={"seed": seed}))
+        messages.append(str(exc_info.value))
+    assert len(set(messages)) == 1
+
+
+_BRIDGE_UNIFORM_SCHEMA = """
+CREATE TABLE a (id INT PRIMARY KEY);
+CREATE TABLE b (id INT PRIMARY KEY);
+CREATE TABLE x (
+    a_id INT NOT NULL,
+    b_id INT NOT NULL,
+    PRIMARY KEY (a_id, b_id),
+    FOREIGN KEY (a_id) REFERENCES a(id),
+    FOREIGN KEY (b_id) REFERENCES b(id)
+);
+"""
+
+
+def test_bridge_without_quota_is_coarsely_uniform_without_replacement() -> None:
+    spec = parse_ddl(_BRIDGE_UNIFORM_SCHEMA)
+    counts: Counter[tuple[tuple[int, int], ...]] = Counter()
+    for seed in range(1000):
+        config = Config(
+            seed=seed,
+            tables={
+                "a": TableConfig(rows=2, columns={"id": _seq(1)}),
+                "b": TableConfig(rows=2, columns={"id": _seq(10)}),
+                "x": TableConfig(rows=2),
+            },
+        )
+        dataset = generate_dataset(spec, config)
+        rows = dataset.tables["x"]
+        assert dataset.quarantine == {}
+        assert len({(row["a_id"], row["b_id"]) for row in rows}) == 2
+        counts[tuple(sorted((row["a_id"], row["b_id"]) for row in rows))] += 1
+
+    assert len(counts) == 6
+    assert min(counts.values()) >= 100
+    assert max(counts.values()) <= 230
