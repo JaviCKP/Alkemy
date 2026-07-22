@@ -42,13 +42,19 @@ coincidir, incumplir cuotas o reconstruir el producto cartesiano de un puente.
   distintos se asignan con capacidades independientes.
 - `uniform`, `zipf` y `unique_subset` eligen dentro del grupo compatible de la
   fila. Las cuotas se preparan por grupos compartidos, usando intervalos
-  conjuntos de `min/max`, y se rechaza de forma estable cualquier combinación
-  infactible; nunca se sustituye en silencio el padre impuesto por una cuota.
-- Una tabla puente muestrea, sin reemplazo, índices del espacio de pares
-  compatibles mediante un índice plano y `unrank`; no materializa todo el
-  producto cartesiano. Si hay cuotas, genera grados en cada lado y construye
-  simultáneamente un emparejamiento de pares únicos, conservando las cuotas de
-  ambos lados o fallando determinísticamente.
+  conjuntos de `min/max` y la capacidad de los padres libres de cada
+  `unique_subset`; las relaciones obligatorias también aportan soporte al
+  rango. La etiqueta de grupo de todas las filas se resuelve globalmente antes
+  de escoger padres, incluidas las máscaras `NULL` distintas, y se rechaza de
+  forma estable cualquier combinación infactible; nunca se sustituye en
+  silencio el padre impuesto por una cuota.
+- Una tabla puente sin cuotas muestrea, sin reemplazo, índices del espacio de
+  pares compatibles mediante un índice plano y `unrank`; no materializa todo el
+  producto cartesiano. Si hay cuotas, una circulación con cotas inferiores y
+  superiores usa una arista de capacidad 1 por par compatible y fuerza el
+  flujo total de la tabla. El emparejamiento se obtiene conjuntamente, sin
+  construir dos secuencias de grados independientes; la semilla solo ordena
+  aristas factibles o desempata después de comprobar la circulación.
 - Todas las rutas usan semillas jerárquicas estables por tabla, relación,
   grupo y puente. La instrumentación de trabajo (`engine._SELECTION_WORK`) es
   privada y solo sirve para comprobar la complejidad estructural en tests.

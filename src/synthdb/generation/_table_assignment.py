@@ -12,9 +12,9 @@ no dependen de sus clases.
 from __future__ import annotations
 
 import bisect
-import heapq
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from functools import cache
 from random import Random
 from typing import Any, Protocol
 
@@ -210,23 +210,6 @@ class TableAssigner:
                     "asignarse conjuntamente de forma segura; separa las relaciones o "
                     "añade una columna discriminadora común."
                 )
-            if sum(state.relation.strategy == "quota" for state in component.states) > 1:
-                quota_states = [
-                    state for state in component.states if state.relation.strategy == "quota"
-                ]
-                ratios = {
-                    float(state.relation.params.get("null_ratio", 0.0)) for state in quota_states
-                }
-                if len(ratios) > 1 and any(
-                    int(state.relation.params["min"]) > 0 for state in quota_states
-                ):
-                    labels = _relations_label(quota_states)
-                    raise self._error(
-                        f"tabla {self.table_name}: las cuotas compartidas {labels} usan "
-                        "null_ratio distintos y min>0; la asignación conjunta de sus "
-                        "patrones NULL no es compatible con este asignador. Usa el mismo "
-                        "null_ratio o min=0 en las relaciones compartidas."
-                    )
 
     def _prepare_null_masks(self) -> None:
         """Decide NULL por relación, sin compartir tiradas entre FKs."""
@@ -254,10 +237,14 @@ class TableAssigner:
         for state in component.states:
             state.groups = _group_parent_indices(state.relation, component.discriminator)
 
-        quota_states = [state for state in component.states if state.relation.strategy == "quota"]
-        if quota_states and not validate_only:
-            self._prepare_quota_component(component, quota_states)
-        elif quota_states:
+        managed_states = [
+            state
+            for state in component.states
+            if state.relation.strategy in {"quota", "unique_subset"}
+        ]
+        if managed_states and not validate_only:
+            self._prepare_managed_component(component)
+        elif any(state.relation.strategy == "quota" for state in component.states):
             # A leveled table supplies a discriminator per row. Its external FK
             # quotas are deliberately rejected before they can be silently
             # reassigned against that row-specific value.
@@ -276,148 +263,94 @@ class TableAssigner:
         non_null = [index for index, is_null in enumerate(state.null_rows) if not is_null]
         state.quota = self._quota_for_rows(state, non_null)
 
-    def _prepare_quota_component(
-        self, component: _Component, quota_states: list[_RelationState]
-    ) -> None:
+    def _prepare_managed_component(self, component: _Component) -> None:
+        """Assign shared groups globally for quota and without-replacement FKs."""
+        constrained = [state for state in component.states if _is_group_constraint_state(state)]
         active_sets = {
-            tuple(index for index, is_null in enumerate(state.null_rows) if not is_null)
-            for state in quota_states
-        }
-        if len(quota_states) == 1 or len(active_sets) == 1:
-            active_rows = list(next(iter(active_sets))) if active_sets else []
-            self._prepare_fixed_group_quota(component, quota_states, active_rows)
-            return
-
-        # Different nullable quotas need independent NULL masks. With min=0 the
-        # group assignment can be made row by row while tracking every max.
-        if any(int(state.relation.params["min"]) > 0 for state in quota_states):
-            raise self._error(
-                f"tabla {self.table_name}: las cuotas compartidas "
-                f"{_relations_label(quota_states)} "
-                "han producido patrones NULL distintos con min>0. La combinación no se "
-                "puede certificar sin relajar una cuota; fija un patrón común o usa min=0."
+            tuple(
+                row_index for row_index in range(self.total) if self._state_active(state, row_index)
             )
-        component.group_labels = [None] * self.total
-        remaining_capacity: dict[FkKey, dict[tuple[Any, ...], int]] = {
-            state.key: {
-                group: len(indices) * int(state.relation.params["max"])
-                for group, indices in state.groups.items()
-            }
-            for state in quota_states
+            for state in constrained
+            if any(self._state_active(state, row_index) for row_index in range(self.total))
+            or (state.relation.strategy == "quota" and int(state.relation.params["min"]) > 0)
         }
-        for row_index, rng in enumerate(self.row_rngs):
-            active = [
-                state
-                for state in component.states
-                if not state.relation.unresolved
-                and not state.relation.allow_missing_parents
-                and state.relation.parent_rows
-                and not state.null_rows[row_index]
-            ]
-            constraining = [
-                state
-                for state in active
-                if state.relation.strategy == "quota" or not state.relation.nullable_columns
-            ]
-            group_keys = self._candidate_groups(component, constraining or active, None)
-            if not group_keys:
-                if active:
-                    raise self._incompatible_row_error(component, row_index)
-                continue
-            usable = [
-                group
-                for group in group_keys
-                if all(
-                    state.null_rows[row_index]
-                    or group not in remaining_capacity[state.key]
-                    or remaining_capacity[state.key][group] > 0
-                    for state in quota_states
-                )
-            ]
-            if not usable:
-                raise self._error(
-                    f"tabla {self.table_name}: las cuotas compartidas se quedan sin capacidad "
-                    f"en la fila {row_index}; revisa max y las relaciones que comparten "
-                    "columnas."
-                )
-            group = usable[rng.randrange(len(usable))]
-            component.group_labels[row_index] = group
-            for state in quota_states:
-                if not state.null_rows[row_index]:
-                    remaining_capacity[state.key][group] -= 1
-        self._fill_group_quota_assignments(component, quota_states)
+        if len(active_sets) <= 1:
+            self._prepare_fixed_group_component(component, constrained, active_sets)
+        else:
+            self._prepare_variable_group_component(component, constrained)
 
-    def _prepare_fixed_group_quota(
+    def _prepare_fixed_group_component(
         self,
         component: _Component,
-        quota_states: list[_RelationState],
-        active_rows: list[int],
+        constrained: list[_RelationState],
+        active_sets: set[tuple[int, ...]],
     ) -> None:
-        required_states = [
+        """Use exact group intervals when all active constraints share their rows."""
+        active_rows = list(next(iter(active_sets), ()))
+        active_states = [
             state
-            for state in component.states
-            if any(
-                not state.relation.unresolved
-                and not state.relation.allow_missing_parents
-                and state.relation.parent_rows
-                and not state.null_rows[row_index]
-                for row_index in active_rows
-            )
-            and (state.relation.strategy == "quota" or not state.relation.nullable_columns)
+            for state in constrained
+            if any(self._state_active(state, row_index) for row_index in active_rows)
         ]
-        common_groups = self._candidate_groups(component, required_states, None)
+        if not active_states:
+            if any(
+                state.relation.strategy == "quota" and int(state.relation.params["min"]) > 0
+                for state in constrained
+            ):
+                raise self._global_component_error(component, constrained)
+            component.group_labels = [None] * self.total
+            for state in self.states.values():
+                if state.relation.strategy == "quota":
+                    state.quota = [-1] * self.total
+            return
+
+        common_groups = self._candidate_groups(component, active_states, None)
         ranges: dict[tuple[Any, ...], tuple[int, int]] = {}
         for group in common_groups:
-            intervals: list[tuple[int, int]] = []
-            for state in quota_states:
+            low = 0
+            high = len(active_rows)
+            valid = True
+            for state in active_states:
                 parents = state.groups.get(group, [])
                 if not parents:
-                    intervals = []
+                    valid = False
                     break
-                minimum = int(state.relation.params["min"])
-                maximum = int(state.relation.params["max"])
-                intervals.append((len(parents) * minimum, len(parents) * maximum))
-            if not intervals:
-                continue
-            low = max(interval[0] for interval in intervals)
-            high = min(interval[1] for interval in intervals)
-            if low <= high:
+                if state.relation.strategy == "quota":
+                    minimum = int(state.relation.params["min"])
+                    maximum = int(state.relation.params["max"])
+                    low = max(low, len(parents) * minimum)
+                    high = min(high, len(parents) * maximum)
+                elif state.relation.strategy == "unique_subset":
+                    # A group can consume each of its free unique parents at most once.
+                    high = min(high, len(parents))
+            if valid and low <= high:
                 ranges[group] = (low, high)
-            elif any(interval[0] > 0 for interval in intervals):
-                raise self._quota_component_error(component, quota_states, group)
 
-        for state in quota_states:
-            if int(state.relation.params["min"]) <= 0:
-                continue
-            missing = [group for group in state.groups if group not in ranges]
-            if missing:
-                raise self._quota_component_error(component, quota_states, missing[0])
+        quota_states = [state for state in active_states if state.relation.strategy == "quota"]
+        if quota_states:
+            for state in quota_states:
+                if int(state.relation.params["min"]) <= 0:
+                    continue
+                missing = [group for group in state.groups if group not in ranges]
+                if missing:
+                    raise self._global_component_error(component, constrained, missing[0])
 
         needed = len(active_rows)
         if not ranges:
-            if needed == 0 and all(
-                int(state.relation.params["min"]) == 0 for state in quota_states
-            ):
+            if needed == 0:
                 component.group_labels = [None] * self.total
                 for state in quota_states:
                     state.quota = [-1] * self.total
                 return
-            raise self._error(
-                f"tabla {self.table_name}: las cuotas compartidas {_relations_label(quota_states)} "
-                f"no tienen grupos compatibles para alojar {needed} filas. Añade padres "
-                "compatibles o ajusta min/max."
-            )
+            raise self._global_component_error(component, constrained)
+
         low_total = sum(low for low, _ in ranges.values())
         high_total = sum(high for _, high in ranges.values())
         if not low_total <= needed <= high_total:
-            raise self._error(
-                f"tabla {self.table_name}: las cuotas compartidas {_relations_label(quota_states)} "
-                f"no pueden alojar conjuntamente {needed} hijos; el total factible está en "
-                f"[{low_total}, {high_total}]. Ajusta las cuotas, los padres o las filas."
-            )
+            raise self._global_component_error(component, constrained)
 
         order = _stable_group_order(ranges)
-        group_rng = Random(seed_for_table(self.seed, f"{self.table_name}:quota-groups"))
+        group_rng = Random(seed_for_table(self.seed, f"{self.table_name}:component-groups"))
         counts = _distribute_counts(order, ranges, needed, group_rng)
         labels: list[tuple[Any, ...]] = []
         for group in order:
@@ -427,6 +360,131 @@ class TableAssigner:
         for row_index, group in zip(active_rows, labels, strict=True):
             component.group_labels[row_index] = group
         self._fill_group_quota_assignments(component, quota_states)
+
+    def _prepare_variable_group_component(
+        self, component: _Component, constrained: list[_RelationState]
+    ) -> None:
+        """Find a row/group assignment while respecting every active capacity."""
+        row_groups: list[tuple[tuple[Any, ...], ...]] = []
+        for row_index in range(self.total):
+            active = [state for state in component.states if self._state_active(state, row_index)]
+            constraining = [state for state in active if _is_group_constraint_state(state)]
+            relevant = constraining or active
+            row_groups.append(self._candidate_groups(component, relevant, None) if relevant else ())
+            if active and not row_groups[-1]:
+                raise self._incompatible_row_error(component, row_index)
+
+        limited_states = [
+            state for state in constrained if state.relation.strategy in {"quota", "unique_subset"}
+        ]
+        layout: list[tuple[_RelationState, tuple[Any, ...], int, int]] = []
+        for state in limited_states:
+            for group in _stable_group_order(state.groups):
+                if state.relation.strategy == "quota":
+                    minimum = len(state.groups[group]) * int(state.relation.params["min"])
+                    maximum = len(state.groups[group]) * int(state.relation.params["max"])
+                else:
+                    minimum = 0
+                    maximum = len(state.groups[group])
+                layout.append((state, group, minimum, maximum))
+
+        future_possible = [[0] * len(layout) for _ in range(self.total + 1)]
+        for row_index in range(self.total - 1, -1, -1):
+            future_possible[row_index] = future_possible[row_index + 1].copy()
+            for offset, (state, group, _, _) in enumerate(layout):
+                if self._state_active(state, row_index) and group in row_groups[row_index]:
+                    future_possible[row_index][offset] += 1
+
+        def incremented(
+            row_index: int, group: tuple[Any, ...], counts: tuple[int, ...]
+        ) -> tuple[int, ...] | None:
+            updated = list(counts)
+            for offset, (state, state_group, _, maximum) in enumerate(layout):
+                if (
+                    state_group == group
+                    and self._state_active(state, row_index)
+                    and updated[offset] >= maximum
+                ):
+                    return None
+                if state_group == group and self._state_active(state, row_index):
+                    updated[offset] += 1
+            return tuple(updated)
+
+        @cache
+        def can_complete(row_index: int, counts: tuple[int, ...]) -> bool:
+            if row_index == self.total:
+                return all(
+                    count >= minimum
+                    for count, (_, _, minimum, _) in zip(counts, layout, strict=True)
+                )
+            options = row_groups[row_index]
+            if not options:
+                return can_complete(row_index + 1, counts)
+            for group in options:
+                updated = incremented(row_index, group, counts)
+                if updated is None:
+                    continue
+                if any(
+                    count + future_possible[row_index + 1][offset] < minimum
+                    for offset, (count, (_, _, minimum, _)) in enumerate(
+                        zip(updated, layout, strict=True)
+                    )
+                ):
+                    continue
+                if can_complete(row_index + 1, updated):
+                    return True
+            return False
+
+        initial_counts = (0,) * len(layout)
+        if not can_complete(0, initial_counts):
+            raise self._global_component_error(component, constrained)
+
+        labels: list[tuple[Any, ...] | None] = [None] * self.total
+        choice_rng = Random(seed_for_table(self.seed, f"{self.table_name}:component-ties"))
+        counts = initial_counts
+        for row_index, options_tuple in enumerate(row_groups):
+            options = list(options_tuple)
+            if not options:
+                continue
+            choice_rng.shuffle(options)
+            for group in options:
+                updated = incremented(row_index, group, counts)
+                if updated is not None and can_complete(row_index + 1, updated):
+                    labels[row_index] = group
+                    counts = updated
+                    break
+            else:
+                raise AssertionError("la reconstrucción de la asignación global no progresó")
+        component.group_labels = labels
+        self._fill_group_quota_assignments(
+            component,
+            [state for state in component.states if state.relation.strategy == "quota"],
+        )
+
+    def _state_active(self, state: _RelationState, row_index: int) -> bool:
+        """Return whether a relation must consume a parent on this row."""
+        return (
+            not state.relation.unresolved
+            and not state.null_rows[row_index]
+            and not (state.relation.allow_missing_parents and not state.relation.parent_rows)
+        )
+
+    def _global_component_error(
+        self,
+        component: _Component,
+        states: Sequence[_RelationState],
+        group: tuple[Any, ...] | None = None,
+    ) -> BaseException:
+        """Build one stable error for an impossible shared assignment."""
+        detail = f" en el discriminador {group!r}" if group is not None else ""
+        strategies = ", ".join(
+            f"({', '.join(state.key)}) {state.relation.strategy}" for state in states
+        )
+        return self._error(
+            f"tabla {self.table_name}: no existe una asignación global factible{detail} "
+            f"para las relaciones {strategies} en {self.total} filas. Revisa las cuotas, "
+            "la capacidad de unique_subset y los padres compatibles."
+        )
 
     def _fill_group_quota_assignments(
         self, component: _Component, quota_states: list[_RelationState]
@@ -981,6 +1039,13 @@ class TableAssigner:
         )
 
 
+def _is_group_constraint_state(state: _RelationState) -> bool:
+    """Return whether a relation constrains the shared group of a row."""
+    return (
+        state.relation.strategy in {"quota", "unique_subset"} or not state.relation.nullable_columns
+    )
+
+
 def _group_parent_indices(
     relation: AssignmentRelation, discriminator: Sequence[str]
 ) -> dict[tuple[Any, ...], list[int]]:
@@ -1108,6 +1173,16 @@ def _quota_group_interval(
     return parent_count * minimum, parent_count * min(maximum, opposite_count)
 
 
+@dataclass
+class _FlowEdge:
+    """Arista residual de la circulación de un grupo de puente."""
+
+    to: int
+    reverse: int
+    capacity: int
+    initial_capacity: int
+
+
 def _build_group_pairs(
     lefts: list[int],
     rights: list[int],
@@ -1117,102 +1192,150 @@ def _build_group_pairs(
     rng: Random,
     table_name: str,
 ) -> list[tuple[int, int]]:
+    """Construct a simple bipartite b-matching with both degree bounds."""
     if count == 0:
         return []
-    if left_quota is not None:
-        left_assignment = build_quota_assignment(
-            rng,
-            len(lefts),
-            count,
-            int(left_quota.relation.params["min"]),
-            min(int(left_quota.relation.params["max"]), len(rights)),
-        )
-        left_degrees = _quota_degree_counts(left_assignment, len(lefts))
-    else:
-        left_degrees = None
-    if right_quota is not None:
-        right_assignment = build_quota_assignment(
-            rng,
-            len(rights),
-            count,
-            int(right_quota.relation.params["min"]),
-            min(int(right_quota.relation.params["max"]), len(lefts)),
-        )
-        right_degrees = _quota_degree_counts(right_assignment, len(rights))
-    else:
-        right_degrees = None
-
-    if left_degrees is not None and right_degrees is not None:
-        return _match_degrees(lefts, left_degrees, rights, right_degrees, rng, table_name)
-    if left_degrees is not None:
-        pairs: list[tuple[int, int]] = []
-        for left, degree in zip(lefts, left_degrees, strict=True):
-            pairs.extend((left, right) for right in rng.sample(rights, degree))
-        return pairs
-    if right_degrees is not None:
-        pairs = []
-        for right, degree in zip(rights, right_degrees, strict=True):
-            pairs.extend((left, right) for left in rng.sample(lefts, degree))
-        return pairs
-    raise AssertionError("grupo de puente sin cuota en la ruta de cuotas")
-
-
-def _quota_degree_counts(assignment: Sequence[int], n_parents: int) -> list[int]:
-    """Convierte una secuencia de padres de cuota en grados por padre."""
-    counts = [0] * n_parents
-    for parent in assignment:
-        counts[parent] += 1
-    return counts
-
-
-def _match_degrees(
-    lefts: list[int],
-    left_degrees: list[int],
-    rights: list[int],
-    right_degrees: list[int],
-    rng: Random,
-    table_name: str,
-) -> list[tuple[int, int]]:
-    if sum(left_degrees) != sum(right_degrees):
+    if not lefts or not rights:
         raise RuntimeError(
-            f"tabla puente {table_name}: las cuotas de ambos lados no suman el mismo "
-            "número de pares. Ajusta min/max."
+            f"tabla puente {table_name}: no existe un emparejamiento simple compatible "
+            "con las cuotas y la cardinalidad solicitada."
         )
-    right_heap: list[tuple[int, int, int]] = []
-    tie = list(range(len(rights)))
-    rng.shuffle(tie)
-    tie_by_position = dict(enumerate(tie))
-    for position, degree in enumerate(right_degrees):
-        if degree:
-            heapq.heappush(right_heap, (-degree, tie_by_position[position], position))
+
+    left_min, left_max = _bridge_degree_bounds(left_quota, len(rights))
+    right_min, right_max = _bridge_degree_bounds(right_quota, len(lefts))
+    node_count = 2 + len(lefts) + len(rights)
+    source = 0
+    left_start = 1
+    right_start = left_start + len(lefts)
+    sink = right_start + len(rights)
+    graph: list[list[_FlowEdge]] = [[] for _ in range(node_count + 2)]
+    balance = [0] * len(graph)
+
+    def add_bounded_edge(start: int, end: int, lower: int, upper: int) -> int:
+        if lower > upper:
+            raise RuntimeError(
+                f"tabla puente {table_name}: las cotas [{lower}, {upper}] son incompatibles."
+            )
+        reference = _add_flow_edge(graph, start, end, upper - lower)
+        balance[start] -= lower
+        balance[end] += lower
+        return reference
+
+    for position in range(len(lefts)):
+        add_bounded_edge(source, left_start + position, left_min, left_max)
+    for position in range(len(rights)):
+        add_bounded_edge(right_start + position, sink, right_min, right_max)
+
+    # Randomization only affects edge insertion order. Max-flow feasibility is
+    # decided by the complete network, so a seed cannot turn a feasible network
+    # into an error.
     left_order = list(range(len(lefts)))
+    right_order = list(range(len(rights)))
     rng.shuffle(left_order)
-    left_order.sort(key=lambda position: left_degrees[position], reverse=True)
-    pairs: list[tuple[int, int]] = []
+    rng.shuffle(right_order)
+    pair_references: dict[tuple[int, int], int] = {}
     for left_position in left_order:
-        degree = left_degrees[left_position]
-        selected: list[tuple[int, int, int]] = []
-        for _ in range(degree):
-            if not right_heap:
-                raise RuntimeError(
-                    f"tabla puente {table_name}: no existe un emparejamiento simple "
-                    "compatible con ambas cuotas. Ajusta min/max."
-                )
-            item = heapq.heappop(right_heap)
-            selected.append(item)
-            pairs.append((lefts[left_position], rights[item[2]]))
-        for degree_left, tie_value, position in selected:
-            residual = degree_left + 1
-            if residual > 0:
-                raise RuntimeError("grado positivo durante el emparejamiento del puente")
-            if residual:
-                heapq.heappush(right_heap, (residual, tie_value, position))
-    if right_heap:
+        for right_position in right_order:
+            pair_references[(left_position, right_position)] = add_bounded_edge(
+                left_start + left_position,
+                right_start + right_position,
+                0,
+                1,
+            )
+    add_bounded_edge(sink, source, count, count)
+
+    super_source = node_count
+    super_sink = node_count + 1
+    required = 0
+    for node, amount in enumerate(balance[:node_count]):
+        if amount > 0:
+            _add_flow_edge(graph, super_source, node, amount)
+            required += amount
+        elif amount < 0:
+            _add_flow_edge(graph, node, super_sink, -amount)
+    if _max_flow(graph, super_source, super_sink) != required:
         raise RuntimeError(
-            f"tabla puente {table_name}: las cuotas dejan padres derechos sin emparejar. "
-            "Ajusta min/max."
+            f"tabla puente {table_name}: no existe un emparejamiento simple compatible "
+            "con ambas cuotas. Ajusta min/max."
+        )
+
+    pairs = [
+        (lefts[left_position], rights[right_position])
+        for (left_position, right_position), reference in pair_references.items()
+        if graph[left_start + left_position][reference].initial_capacity
+        - graph[left_start + left_position][reference].capacity
+    ]
+    if len(pairs) != count:
+        raise RuntimeError(
+            f"tabla puente {table_name}: la circulación no produjo exactamente {count} pares."
         )
     return pairs
+
+
+def _bridge_degree_bounds(state: _RelationState | None, opposite_count: int) -> tuple[int, int]:
+    """Return per-parent degree bounds, including simple-edge capacity."""
+    if state is None:
+        return 0, opposite_count
+    minimum = int(state.relation.params["min"])
+    maximum = int(state.relation.params["max"])
+    if minimum > opposite_count:
+        raise RuntimeError(
+            f"la FK ({', '.join(state.key)}) exige min={minimum}, pero cada padre "
+            f"solo admite {opposite_count} pares únicos."
+        )
+    return minimum, min(maximum, opposite_count)
+
+
+def _add_flow_edge(graph: list[list[_FlowEdge]], start: int, end: int, capacity: int) -> int:
+    """Add a residual edge and return its forward index."""
+    reference = len(graph[start])
+    reverse = len(graph[end])
+    graph[start].append(_FlowEdge(end, reverse, capacity, capacity))
+    graph[end].append(_FlowEdge(start, reference, 0, 0))
+    return reference
+
+
+def _max_flow(graph: list[list[_FlowEdge]], source: int, sink: int) -> int:
+    """Run deterministic Dinic max-flow over a residual graph."""
+    total = 0
+    while True:
+        levels = [-1] * len(graph)
+        levels[source] = 0
+        queue = [source]
+        for node in queue:
+            for edge in graph[node]:
+                if edge.capacity and levels[edge.to] < 0:
+                    levels[edge.to] = levels[node] + 1
+                    queue.append(edge.to)
+        if levels[sink] < 0:
+            return total
+        next_edge = [0] * len(graph)
+
+        while pushed := _send_flow(graph, levels, next_edge, source, sink, 1 << 60):
+            total += pushed
+
+
+def _send_flow(
+    graph: list[list[_FlowEdge]],
+    levels: list[int],
+    next_edge: list[int],
+    node: int,
+    sink: int,
+    flow: int,
+) -> int:
+    """Push one blocking-flow path in the current Dinic level graph."""
+    if node == sink:
+        return flow
+    while next_edge[node] < len(graph[node]):
+        edge = graph[node][next_edge[node]]
+        if edge.capacity and levels[edge.to] == levels[node] + 1:
+            pushed = _send_flow(graph, levels, next_edge, edge.to, sink, min(flow, edge.capacity))
+            if pushed:
+                edge.capacity -= pushed
+                graph[edge.to][edge.reverse].capacity += pushed
+                return pushed
+        next_edge[node] += 1
+    return 0
 
 
 def _marker(value: Any) -> Any:

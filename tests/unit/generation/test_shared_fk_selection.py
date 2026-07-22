@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from itertools import combinations, product
 
 import pytest
 
@@ -607,6 +608,147 @@ def test_nullable_shared_quotas_can_have_different_null_ratios() -> None:
     assert {row["tenant_id"] for row in rows} == {1, 2}
 
 
+def test_nullable_shared_quotas_assign_groups_globally_before_consuming_capacity() -> None:
+    """Different NULL masks must leave a jointly feasible group assignment."""
+    spec = parse_ddl(_NULLABLE_TWO_QUOTA_SCHEMA)
+    configs = [
+        Config(
+            seed=18,
+            tables={
+                "a": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+                "b": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(20)}),
+                "c": TableConfig(
+                    rows=3,
+                    columns={"id": _seq(100)},
+                    fk={
+                        "a_id": FkQuota(strategy="quota", min=0, max=1, null_ratio=0.5),
+                        "b_id": FkQuota(strategy="quota", min=0, max=1, null_ratio=0.5),
+                    },
+                ),
+            },
+            output=OutputConfig(batch_size=batch_size),
+        )
+        for batch_size in (1, 5000)
+    ]
+    datasets = [generate_dataset(spec, config) for config in configs]
+
+    for dataset in datasets:
+        assert dataset.quarantine == {}
+        rows = dataset.tables["c"]
+        assert len(rows) == 3
+        assert rows[0]["a_id"] is not None and rows[0]["b_id"] is None
+        assert rows[1]["a_id"] is None and rows[1]["b_id"] is not None
+        assert rows[2]["a_id"] is not None and rows[2]["b_id"] is not None
+        assert rows[0]["tenant_id"] == rows[1]["tenant_id"]
+        assert rows[0]["tenant_id"] != rows[2]["tenant_id"]
+        assert all(
+            count <= 1
+            for count in Counter(
+                (row["tenant_id"], row["a_id"]) for row in rows if row["a_id"] is not None
+            ).values()
+        )
+        assert all(
+            count <= 1
+            for count in Counter(
+                (row["tenant_id"], row["b_id"]) for row in rows if row["b_id"] is not None
+            ).values()
+        )
+    assert _digest(datasets[0]) == _digest(datasets[1])
+
+
+@pytest.mark.parametrize("seed", range(5))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_shared_quotas_with_same_null_ratio_allow_independent_masks(
+    seed: int, batch_size: int
+) -> None:
+    """Equal null ratios do not require equal per-row masks."""
+    spec = parse_ddl(_NULLABLE_TWO_QUOTA_SCHEMA)
+    config = Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+            "b": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(20)}),
+            "c": TableConfig(
+                rows=20,
+                columns={"id": _seq(100)},
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=1, max=20, null_ratio=0.5),
+                    "b_id": FkQuota(strategy="quota", min=1, max=20, null_ratio=0.5),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+    dataset = generate_dataset(spec, config)
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["c"]
+    a_counts = Counter((row["tenant_id"], row["a_id"]) for row in rows if row["a_id"])
+    b_counts = Counter((row["tenant_id"], row["b_id"]) for row in rows if row["b_id"])
+    assert all(1 <= a_counts[(tenant, 10 + tenant - 1)] <= 20 for tenant in (1, 2))
+    assert all(1 <= b_counts[(tenant, 20 + tenant - 1)] <= 20 for tenant in (1, 2))
+
+
+_MIXED_QUOTA_UNIQUE_SCHEMA = """
+CREATE TABLE a (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE b (
+    tenant_id INT NOT NULL,
+    id INT NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE c (
+    id INT PRIMARY KEY,
+    tenant_id INT NOT NULL,
+    a_id INT NOT NULL,
+    b_id INT NOT NULL,
+    FOREIGN KEY (tenant_id, a_id) REFERENCES a(tenant_id, id),
+    FOREIGN KEY (tenant_id, b_id) REFERENCES b(tenant_id, id)
+);
+"""
+
+
+@pytest.mark.parametrize("seed", range(30))
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_quota_and_unique_subset_share_capacity_across_tenants(seed: int, batch_size: int) -> None:
+    """A quota cannot consume a group needed by an independent unique subset."""
+    spec = parse_ddl(_MIXED_QUOTA_UNIQUE_SCHEMA)
+    config = Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+            "b": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(20)}),
+            "c": TableConfig(
+                rows=2,
+                columns={"id": _seq(100)},
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=0, max=2),
+                    "b_id": FkUniqueSubset(strategy="unique_subset"),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+    dataset = generate_dataset(spec, config)
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["c"]
+    assert {row["tenant_id"] for row in rows} == {1, 2}
+    assert Counter((row["tenant_id"], row["a_id"]) for row in rows) == {
+        (1, 10): 1,
+        (2, 11): 1,
+    }
+    assert Counter((row["tenant_id"], row["b_id"]) for row in rows) == {
+        (1, 20): 1,
+        (2, 21): 1,
+    }
+
+
 _COMPONENT_QUOTA_SCHEMA = """
 CREATE TABLE a (
     x INT NOT NULL,
@@ -732,6 +874,169 @@ def test_bridge_assigner_preserves_quota_and_pair_uniqueness(seed: int) -> None:
         assert Counter(row["a_id"] for row in rows) == {1: 2, 2: 2}
         assert len({(row["a_id"], row["b_id"]) for row in rows}) == 4
     assert _digest(small) == _digest(large)
+
+
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_bridge_zero_min_quota_seed_two_finds_two_unique_pairs(batch_size: int) -> None:
+    """A feasible 2x2 bridge must not depend on the quota seed."""
+    spec = parse_ddl(_BRIDGE_QUOTA_SCHEMA)
+    config = Config(
+        seed=2,
+        tables={
+            "a": TableConfig(rows=2, columns={"id": _seq(1)}),
+            "b": TableConfig(rows=2, columns={"id": _seq(10)}),
+            "x": TableConfig(
+                rows=2,
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=0, max=2),
+                    "b_id": FkQuota(strategy="quota", min=0, max=2),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+    dataset = generate_dataset(spec, config)
+
+    rows = dataset.tables["x"]
+    assert dataset.quarantine == {}
+    assert len(rows) == 2
+    assert len({(row["a_id"], row["b_id"]) for row in rows}) == 2
+    assert {row["a_id"] for row in rows} <= {1, 2}
+    assert {row["b_id"] for row in rows} <= {10, 11}
+
+
+def _bridge_has_degree_solution(
+    left_count: int,
+    right_count: int,
+    rows: int,
+    left_min: int,
+    left_max: int,
+    right_min: int,
+    right_max: int,
+) -> bool:
+    """Exhaustively decide the small simple-bipartite bridge contract."""
+    edges = list(product(range(left_count), range(right_count)))
+    for selected in combinations(edges, rows):
+        left_degrees = Counter(left for left, _ in selected)
+        right_degrees = Counter(right for _, right in selected)
+        if all(left_min <= left_degrees[left] <= left_max for left in range(left_count)) and all(
+            right_min <= right_degrees[right] <= right_max for right in range(right_count)
+        ):
+            return True
+    return False
+
+
+@pytest.mark.parametrize(
+    (
+        "left_count",
+        "right_count",
+        "rows",
+        "left_min",
+        "left_max",
+        "right_min",
+        "right_max",
+    ),
+    [
+        (1, 1, 1, 0, 1, 0, 1),
+        (1, 3, 3, 0, 3, 1, 1),
+        (2, 2, 2, 0, 2, 0, 2),
+        (2, 3, 3, 0, 2, 0, 1),
+        (3, 2, 4, 1, 2, 0, 2),
+        (3, 3, 5, 0, 2, 1, 2),
+        (3, 3, 6, 1, 2, 1, 2),
+    ],
+)
+@pytest.mark.parametrize("seed", range(10))
+def test_bridge_quota_exhaustive_oracle_accepts_every_seed(
+    left_count: int,
+    right_count: int,
+    rows: int,
+    left_min: int,
+    left_max: int,
+    right_min: int,
+    right_max: int,
+    seed: int,
+) -> None:
+    """The seed may choose a feasible bridge, never certify feasibility."""
+    assert _bridge_has_degree_solution(
+        left_count,
+        right_count,
+        rows,
+        left_min,
+        left_max,
+        right_min,
+        right_max,
+    )
+    spec = parse_ddl(_BRIDGE_QUOTA_SCHEMA)
+    config = Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=left_count, columns={"id": _seq(1)}),
+            "b": TableConfig(rows=right_count, columns={"id": _seq(10)}),
+            "x": TableConfig(
+                rows=rows,
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=left_min, max=left_max),
+                    "b_id": FkQuota(strategy="quota", min=right_min, max=right_max),
+                },
+            ),
+        },
+    )
+
+    dataset = generate_dataset(spec, config)
+
+    assert dataset.quarantine == {}
+    result = dataset.tables["x"]
+    assert len(result) == rows
+    assert len({(row["a_id"], row["b_id"]) for row in result}) == rows
+    assert all(1 <= row["a_id"] <= left_count for row in result)
+    assert all(10 <= row["b_id"] < 10 + right_count for row in result)
+    left_counts = Counter(row["a_id"] for row in result)
+    right_counts = Counter(row["b_id"] for row in result)
+    assert all(
+        left_min <= left_counts.get(parent, 0) <= left_max for parent in range(1, left_count + 1)
+    )
+    assert all(
+        right_min <= right_counts.get(parent, 0) <= right_max
+        for parent in range(10, 10 + right_count)
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (2, 1, 1, 2, 2, 0, 1),
+        (2, 2, 3, 2, 2, 2, 2),
+    ],
+)
+def test_bridge_quota_exhaustive_oracle_rejects_infeasible_stably(
+    case: tuple[int, int, int, int, int, int, int],
+) -> None:
+    """An impossible bridge is rejected before seed-dependent choices."""
+    left_count, right_count, rows, left_min, left_max, right_min, right_max = case
+    assert not _bridge_has_degree_solution(*case)
+    spec = parse_ddl(_BRIDGE_QUOTA_SCHEMA)
+    messages: list[str] = []
+    for seed in range(10):
+        config = Config(
+            seed=seed,
+            tables={
+                "a": TableConfig(rows=left_count, columns={"id": _seq(1)}),
+                "b": TableConfig(rows=right_count, columns={"id": _seq(10)}),
+                "x": TableConfig(
+                    rows=rows,
+                    fk={
+                        "a_id": FkQuota(strategy="quota", min=left_min, max=left_max),
+                        "b_id": FkQuota(strategy="quota", min=right_min, max=right_max),
+                    },
+                ),
+            },
+        )
+        with pytest.raises(GenerationError, match=r"tabla puente x") as exc_info:
+            generate_dataset(spec, config)
+        messages.append(str(exc_info.value))
+    assert len(set(messages)) == 1
 
 
 def _bridge_both_quota_config(seed: int, batch_size: int) -> Config:

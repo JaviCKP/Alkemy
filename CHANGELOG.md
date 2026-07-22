@@ -554,10 +554,15 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
   - coordina por componentes conexas, conserva discriminadores compartidos y
     decide una asignación conjunta válida antes de generar filas;
   - permite máscaras y `null_ratio` independientes para FKs anulables bajo
-    `MATCH SIMPLE`, contando cada cuota solo en sus filas no nulas;
+    `MATCH SIMPLE`, contando cada cuota solo en sus filas no nulas, con una
+    asignación global de grupos que conserva capacidad futura;
+  - incorpora la capacidad de padres libres de `unique_subset` y el soporte de
+    las relaciones obligatorias al rango de cada grupo, junto con las cotas
+    agregadas de todas las cuotas;
   - muestrea puentes uniformemente sin reemplazo por índice plano, sin
     materializar el producto cartesiano, y preserva cuotas de ambos lados con
-    un emparejamiento de grados;
+    una circulación conjunta de aristas de capacidad 1 y flujo total exacto,
+    sin preparar vectores de grados independientes;
   - mantiene semillas jerárquicas, determinismo por `batch_size`, RI, unicidad y
     errores accionables para topologías o cuotas infactibles;
   - añade regresiones para los tres bloqueantes de la revisión, componentes de
