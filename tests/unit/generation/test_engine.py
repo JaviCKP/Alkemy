@@ -285,6 +285,136 @@ def test_composite_fk_without_compatible_required_parent_fails_actionably() -> N
         generate_dataset(spec, config)
 
 
+def test_shared_required_fks_choose_a_compatible_parent_combination() -> None:
+    spec = parse_ddl(
+        """
+        CREATE TABLE lefts (
+            tenant_id INT NOT NULL,
+            id INT NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE rights (
+            tenant_id INT NOT NULL,
+            id INT NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE links (
+            id INT PRIMARY KEY,
+            tenant_id INT NOT NULL,
+            left_id INT NOT NULL,
+            right_id INT NOT NULL,
+            FOREIGN KEY (tenant_id, left_id) REFERENCES lefts(tenant_id, id),
+            FOREIGN KEY (tenant_id, right_id) REFERENCES rights(tenant_id, id)
+        );
+        """
+    )
+    config = Config(
+        seed=0,
+        tables={
+            "lefts": TableConfig(
+                rows=2,
+                columns={
+                    "tenant_id": ColumnConfig(generator="sequence", params={"start": 1}),
+                    "id": ColumnConfig(generator="sequence", params={"start": 10}),
+                },
+            ),
+            "rights": TableConfig(
+                rows=1,
+                columns={
+                    "tenant_id": ColumnConfig(generator="choice", params={"values": [2]}),
+                    "id": ColumnConfig(generator="sequence", params={"start": 20}),
+                },
+            ),
+            "links": TableConfig(
+                rows=1,
+                columns={"id": ColumnConfig(generator="sequence", params={"start": 30})},
+            ),
+        },
+    )
+
+    dataset = generate_dataset(spec, config)
+
+    assert dataset.quarantine == {}
+    assert dataset.tables["links"] == [{"id": 30, "tenant_id": 2, "left_id": 11, "right_id": 20}]
+
+
+def test_required_fk_with_quarantined_empty_parent_quarantines_the_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = parse_ddl(
+        """
+        CREATE TABLE parent (id SERIAL PRIMARY KEY, value INT NOT NULL);
+        CREATE TABLE child (
+            id SERIAL PRIMARY KEY,
+            parent_id INT NOT NULL REFERENCES parent(id)
+        );
+        """
+    )
+
+    def quarantine_parent(batch: list[dict[str, Any]]) -> None:
+        if batch and "value" in batch[0]:
+            batch[0]["value"] = None
+
+    monkeypatch.setattr(engine, "complete_batch", quarantine_parent)
+
+    dataset = generate_dataset(
+        spec,
+        Config(tables={"parent": TableConfig(rows=1), "child": TableConfig(rows=1)}),
+    )
+
+    assert dataset.tables["parent"] == []
+    assert dataset.tables["child"] == []
+    assert len(dataset.quarantine["parent"]) == 1
+    assert len(dataset.quarantine["child"]) == 1
+
+
+def test_match_full_root_does_not_become_partially_null_via_shared_fk() -> None:
+    spec = parse_ddl(
+        """
+        CREATE TABLE parent (
+            tenant_id INT NOT NULL,
+            id INT NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE offers (
+            id INT PRIMARY KEY,
+            tenant_id INT,
+            parent_id INT,
+            previous_id INT,
+            UNIQUE (tenant_id, id),
+            FOREIGN KEY (tenant_id, parent_id) REFERENCES parent(tenant_id, id),
+            FOREIGN KEY (tenant_id, previous_id)
+                REFERENCES offers(tenant_id, id) MATCH FULL
+        );
+        """
+    )
+    dataset = generate_dataset(
+        spec,
+        Config(
+            tables={
+                "parent": TableConfig(
+                    rows=1,
+                    columns={
+                        "tenant_id": ColumnConfig(generator="sequence", params={"start": 1}),
+                        "id": ColumnConfig(generator="sequence", params={"start": 10}),
+                    },
+                ),
+                "offers": TableConfig(
+                    rows=1,
+                    columns={"id": ColumnConfig(generator="sequence", params={"start": 30})},
+                ),
+            },
+            hierarchy={"offers.previous_id": HierarchyConfig(branching=2, max_depth=1)},
+        ),
+    )
+
+    assert dataset.quarantine == {}
+    row = dataset.tables["offers"][0]
+    assert row["tenant_id"] is None
+    assert row["parent_id"] is None
+    assert row["previous_id"] is None
+
+
 def test_qualified_self_reference_uses_the_canonical_table_name() -> None:
     spec = parse_ddl(
         "CREATE TABLE public.employees ("

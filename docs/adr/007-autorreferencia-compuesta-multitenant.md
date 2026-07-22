@@ -21,9 +21,13 @@ discriminador aún no existe cuando se construye la jerarquía.
   columnas sean anulables bajo `MATCH FULL`.
 - `generation/engine.py` mantiene un estado de selección por FK y por tabla.
   Cuando varias FKs comparten columnas, procesa primero las obligatorias y
-  filtra los padres por los valores locales ya fijados. Una FK parcialmente
-  nullable puede anular solo su subconjunto nullable; una FK obligatoria sin
-  padre compatible produce `GenerationError` con tabla, columnas y valores.
+  filtra los padres por los valores locales ya fijados y descarta de antemano
+  candidatos que no tienen soporte en las FKs obligatorias restantes. Una FK
+  parcialmente nullable puede anular solo su subconjunto nullable; una FK
+  obligatoria sin padre compatible produce `GenerationError` con tabla,
+  columnas y valores. Si el padre está completamente en cuarentena y el modo
+  es `on_error=quarantine`, la FK queda sin resolver para que la fila hija
+  también se aparte y el cierre RI pueda continuar.
 - `InsertLeveledPhase` reutiliza esa selección para las FKs externas, fija el
   padre del nivel anterior antes de generar la fila y, en raíces
   `roots_point_to_self`, asigna la autorreferencia después de generar la PK y
