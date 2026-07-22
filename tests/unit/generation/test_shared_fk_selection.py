@@ -22,6 +22,8 @@ import hashlib
 import json
 from collections import Counter
 from itertools import combinations, product
+from random import Random
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,6 +38,7 @@ from synthdb.config.models import (
     TableConfig,
 )
 from synthdb.generation import engine
+from synthdb.generation._table_assignment import _build_group_pairs
 from synthdb.generation.engine import Dataset, GenerationError, generate_dataset
 from synthdb.parsing.ddl import parse_ddl
 
@@ -690,6 +693,76 @@ def test_shared_quotas_with_same_null_ratio_allow_independent_masks(
     assert all(1 <= b_counts[(tenant, 20 + tenant - 1)] <= 20 for tenant in (1, 2))
 
 
+def _large_variable_component_config(rows: int, seed: int, batch_size: int) -> Config:
+    return Config(
+        seed=seed,
+        tables={
+            "a": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(10)}),
+            "b": TableConfig(rows=2, columns={"tenant_id": _seq(1), "id": _seq(20)}),
+            "c": TableConfig(
+                rows=rows,
+                columns={"id": _seq(100)},
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=0, max=rows, null_ratio=0.5),
+                    "b_id": FkQuota(strategy="quota", min=0, max=rows, null_ratio=0.5),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=batch_size),
+    )
+
+
+def _large_variable_component_probe(
+    rows: int, *, seed: int = 18, batch_size: int = 5000
+) -> tuple[int, int, Dataset]:
+    dataset = generate_dataset(
+        parse_ddl(_NULLABLE_TWO_QUOTA_SCHEMA),
+        _large_variable_component_config(rows, seed, batch_size),
+    )
+    return (
+        engine._SELECTION_WORK.global_solver_work,
+        engine._SELECTION_WORK.global_solver_states,
+        dataset,
+    )
+
+
+@pytest.mark.parametrize("batch_size", [1, 5000])
+def test_global_component_solver_handles_1200_rows_without_recursion(
+    batch_size: int,
+) -> None:
+    """A feasible variable-mask component must not depend on Python stack depth."""
+    dataset = generate_dataset(
+        parse_ddl(_NULLABLE_TWO_QUOTA_SCHEMA),
+        _large_variable_component_config(rows=1200, seed=18, batch_size=batch_size),
+    )
+
+    assert dataset.quarantine == {}
+    rows = dataset.tables["c"]
+    assert len(rows) == 1200
+    assert any((row["a_id"] is None) != (row["b_id"] is None) for row in rows)
+    a_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["a"]}
+    b_keys = {(row["tenant_id"], row["id"]) for row in dataset.tables["b"]}
+    for row in rows:
+        if row["a_id"] is not None:
+            assert (row["tenant_id"], row["a_id"]) in a_keys
+        if row["b_id"] is not None:
+            assert (row["tenant_id"], row["b_id"]) in b_keys
+
+
+def test_global_component_solver_work_is_linear_at_10000_rows() -> None:
+    """Aggregated signatures keep solver work proportional to rows, not states^rows."""
+    small_work, small_states, small = _large_variable_component_probe(1200)
+    large_work, large_states, large = _large_variable_component_probe(10_000)
+
+    for dataset, expected_rows in ((small, 1200), (large, 10_000)):
+        assert dataset.quarantine == {}
+        assert len(dataset.tables["c"]) == expected_rows
+    assert small_work > 0 and small_states > 0
+    assert large_work <= 12 * small_work
+    assert large_states <= 12 * small_states
+    assert large_work <= 200 * 10_000
+
+
 _MIXED_QUOTA_UNIQUE_SCHEMA = """
 CREATE TABLE a (
     tenant_id INT NOT NULL,
@@ -927,6 +1000,76 @@ def _bridge_has_degree_solution(
     return False
 
 
+def _all_small_bridge_contracts() -> list[tuple[int, int, int, int, int, int, int]]:
+    return [
+        (left_count, right_count, rows, left_min, left_max, right_min, right_max)
+        for left_count in range(1, 4)
+        for right_count in range(1, 4)
+        for rows in range(left_count * right_count + 1)
+        for left_min in range(right_count + 1)
+        for left_max in range(left_min, right_count + 1)
+        for right_min in range(left_count + 1)
+        for right_max in range(right_min, left_count + 1)
+    ]
+
+
+def _quota_stub(minimum: int, maximum: int, key: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        key=(key,),
+        relation=SimpleNamespace(params={"min": minimum, "max": maximum}),
+    )
+
+
+def test_bridge_quota_matches_complete_small_exhaustive_oracle() -> None:
+    """Every small feasible contract works for every seed; infeasible ones never do."""
+    contracts = _all_small_bridge_contracts()
+    assert len(contracts) > 2000
+    for case in contracts:
+        (
+            left_count,
+            right_count,
+            rows,
+            left_min,
+            left_max,
+            right_min,
+            right_max,
+        ) = case
+        expected = _bridge_has_degree_solution(*case)
+        errors: list[str] = []
+        for seed in range(5):
+            work = SimpleNamespace(bridge_quota_work=0)
+            try:
+                pairs = _build_group_pairs(
+                    list(range(left_count)),
+                    list(range(right_count)),
+                    rows,
+                    _quota_stub(left_min, left_max, "left"),
+                    _quota_stub(right_min, right_max, "right"),
+                    Random(seed),
+                    "x",
+                    work,
+                )
+            except RuntimeError as exc:
+                errors.append(str(exc))
+                continue
+
+            assert expected, case
+            assert len(pairs) == rows
+            assert len(set(pairs)) == rows
+            left_counts = Counter(left for left, _ in pairs)
+            right_counts = Counter(right for _, right in pairs)
+            assert all(left_min <= left_counts[left] <= left_max for left in range(left_count))
+            assert all(
+                right_min <= right_counts[right] <= right_max for right in range(right_count)
+            )
+
+        if expected:
+            assert not errors, (case, errors)
+        else:
+            assert len(errors) == 5, case
+            assert len(set(errors)) == 1, (case, errors)
+
+
 @pytest.mark.parametrize(
     (
         "left_count",
@@ -1097,6 +1240,45 @@ def test_bridge_assigner_rejects_incompatible_quotas_deterministically() -> None
             generate_dataset(spec, config.model_copy(update={"seed": seed}))
         messages.append(str(exc_info.value))
     assert len(set(messages)) == 1
+
+
+def _bridge_quota_probe(n: int) -> tuple[int, Dataset]:
+    spec = parse_ddl(_BRIDGE_QUOTA_SCHEMA)
+    config = Config(
+        seed=2,
+        tables={
+            "a": TableConfig(rows=n, columns={"id": _seq(1)}),
+            "b": TableConfig(rows=n, columns={"id": _seq(10)}),
+            "x": TableConfig(
+                rows=n,
+                fk={
+                    "a_id": FkQuota(strategy="quota", min=0, max=n),
+                    "b_id": FkQuota(strategy="quota", min=0, max=n),
+                },
+            ),
+        },
+        output=OutputConfig(batch_size=5000),
+    )
+    dataset = generate_dataset(spec, config)
+    return engine._SELECTION_WORK.bridge_quota_work, dataset
+
+
+def test_bridge_quota_resolution_work_scales_with_parents_and_requested_pairs() -> None:
+    """Quota bridges must not inspect the complete L×R edge space."""
+    measurements: list[tuple[int, int]] = []
+    for n in (200, 800, 1600, 3200):
+        work, dataset = _bridge_quota_probe(n)
+        rows = dataset.tables["x"]
+        assert dataset.quarantine == {}
+        assert len(rows) == n
+        assert len({(row["a_id"], row["b_id"]) for row in rows}) == n
+        assert all(1 <= row["a_id"] <= n for row in rows)
+        assert all(10 <= row["b_id"] < 10 + n for row in rows)
+        assert work > 0
+        assert work <= 32 * n
+        measurements.append((n, work))
+
+    assert measurements[-1][1] <= 20 * measurements[0][1]
 
 
 _BRIDGE_UNIFORM_SCHEMA = """

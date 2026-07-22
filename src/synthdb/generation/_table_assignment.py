@@ -12,9 +12,9 @@ no dependen de sus clases.
 from __future__ import annotations
 
 import bisect
-from collections.abc import Callable, Sequence
+import heapq
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from functools import cache
 from random import Random
 from typing import Any, Protocol
 
@@ -36,6 +36,9 @@ class _SelectionWork(Protocol):
 
     filter_scans: int
     bridge_pairs_examined: int
+    bridge_quota_work: int
+    global_solver_work: int
+    global_solver_states: int
 
 
 @dataclass
@@ -364,15 +367,26 @@ class TableAssigner:
     def _prepare_variable_group_component(
         self, component: _Component, constrained: list[_RelationState]
     ) -> None:
-        """Find a row/group assignment while respecting every active capacity."""
-        row_groups: list[tuple[tuple[Any, ...], ...]] = []
+        """Find labels with an iterative DP over equivalent row signatures.
+
+        A signature is the pair ``(active relations, candidate groups)``. All
+        rows with the same signature contribute identically to every quota or
+        ``unique_subset`` capacity, so the DP assigns their aggregate counts
+        instead of keeping one state per row. The explicit stack makes search
+        depth depend on the number of signatures, never on ``self.total``.
+        """
+        signature_rows: dict[tuple[tuple[FkKey, ...], tuple[tuple[Any, ...], ...]], list[int]] = {}
         for row_index in range(self.total):
+            self.work.global_solver_work += 1
             active = [state for state in component.states if self._state_active(state, row_index)]
             constraining = [state for state in active if _is_group_constraint_state(state)]
             relevant = constraining or active
-            row_groups.append(self._candidate_groups(component, relevant, None) if relevant else ())
-            if active and not row_groups[-1]:
+            options = self._candidate_groups(component, relevant, None) if relevant else ()
+            if active and not options:
                 raise self._incompatible_row_error(component, row_index)
+            if options:
+                active_keys = tuple(state.key for state in active)
+                signature_rows.setdefault((active_keys, options), []).append(row_index)
 
         limited_states = [
             state for state in constrained if state.relation.strategy in {"quota", "unique_subset"}
@@ -388,73 +402,135 @@ class TableAssigner:
                     maximum = len(state.groups[group])
                 layout.append((state, group, minimum, maximum))
 
-        future_possible = [[0] * len(layout) for _ in range(self.total + 1)]
-        for row_index in range(self.total - 1, -1, -1):
-            future_possible[row_index] = future_possible[row_index + 1].copy()
-            for offset, (state, group, _, _) in enumerate(layout):
-                if self._state_active(state, row_index) and group in row_groups[row_index]:
-                    future_possible[row_index][offset] += 1
+        signatures = [
+            (active_keys, options, rows) for (active_keys, options), rows in signature_rows.items()
+        ]
+        self.work.global_solver_work += sum(len(options) for _, options, _ in signatures)
+        self.work.global_solver_states += len(signatures)
+        signature_options: list[list[tuple[Any, ...]]] = []
+        signature_increments: list[tuple[tuple[int, ...], ...]] = []
+        for active_keys, options, _ in signatures:
+            active_set = set(active_keys)
+            ordered_options = list(options)
+            signature_options.append(ordered_options)
+            signature_increments.append(
+                tuple(
+                    tuple(
+                        offset
+                        for offset, (state, state_group, _, _) in enumerate(layout)
+                        if state.key in active_set and state_group == group
+                    )
+                    for group in ordered_options
+                )
+            )
 
-        def incremented(
-            row_index: int, group: tuple[Any, ...], counts: tuple[int, ...]
+        future_possible = [[0] * len(layout) for _ in range(len(signatures) + 1)]
+        for signature_index in range(len(signatures) - 1, -1, -1):
+            future_possible[signature_index] = future_possible[signature_index + 1].copy()
+            row_count = len(signatures[signature_index][2])
+            for offsets in signature_increments[signature_index]:
+                for offset in offsets:
+                    future_possible[signature_index][offset] += row_count
+                    self.work.global_solver_work += 1
+
+        def allocation_candidates(row_count: int, option_count: int) -> Iterator[tuple[int, ...]]:
+            """Yield all aggregate distributions without a row-depth call stack."""
+            if option_count == 1:
+                yield (row_count,)
+                return
+            parts = [0] * option_count
+            parts[0] = row_count
+            while True:
+                yield tuple(parts)
+                pivot = option_count - 2
+                while pivot >= 0 and parts[pivot] == 0:
+                    pivot -= 1
+                if pivot < 0:
+                    return
+                remainder = 1 + sum(parts[pivot + 1 :])
+                parts[pivot] -= 1
+                parts[pivot + 1] = remainder
+                for offset in range(pivot + 2, option_count):
+                    parts[offset] = 0
+
+        def apply_allocation(
+            counts: tuple[int, ...],
+            increments: tuple[tuple[int, ...], ...],
+            allocation: tuple[int, ...],
         ) -> tuple[int, ...] | None:
             updated = list(counts)
-            for offset, (state, state_group, _, maximum) in enumerate(layout):
-                if (
-                    state_group == group
-                    and self._state_active(state, row_index)
-                    and updated[offset] >= maximum
-                ):
-                    return None
-                if state_group == group and self._state_active(state, row_index):
-                    updated[offset] += 1
+            for amount, offsets in zip(allocation, increments, strict=True):
+                if amount == 0:
+                    continue
+                self.work.global_solver_work += amount * len(offsets)
+                for offset in offsets:
+                    updated[offset] += amount
+                    if updated[offset] > layout[offset][3]:
+                        return None
             return tuple(updated)
 
-        @cache
-        def can_complete(row_index: int, counts: tuple[int, ...]) -> bool:
-            if row_index == self.total:
-                return all(
-                    count >= minimum
-                    for count, (_, _, minimum, _) in zip(counts, layout, strict=True)
-                )
-            options = row_groups[row_index]
-            if not options:
-                return can_complete(row_index + 1, counts)
-            for group in options:
-                updated = incremented(row_index, group, counts)
-                if updated is None:
-                    continue
-                if any(
-                    count + future_possible[row_index + 1][offset] < minimum
-                    for offset, (count, (_, _, minimum, _)) in enumerate(
-                        zip(updated, layout, strict=True)
-                    )
-                ):
-                    continue
-                if can_complete(row_index + 1, updated):
-                    return True
-            return False
+        choice_rng = Random(seed_for_table(self.seed, f"{self.table_name}:component-ties"))
+        for signature_index, shuffled_options in enumerate(signature_options):
+            paired = list(zip(shuffled_options, signature_increments[signature_index], strict=True))
+            choice_rng.shuffle(paired)
+            signature_options[signature_index] = [option for option, _ in paired]
+            signature_increments[signature_index] = tuple(increments for _, increments in paired)
 
+        depth = 0
         initial_counts = (0,) * len(layout)
-        if not can_complete(0, initial_counts):
+        prefix_counts = [initial_counts] * (len(signatures) + 1)
+        iterators: list[Iterator[tuple[int, ...]] | None] = [None] * len(signatures)
+        chosen: list[tuple[int, ...] | None] = [None] * len(signatures)
+        while 0 <= depth < len(signatures):
+            iterator = iterators[depth]
+            if iterator is None:
+                row_count = len(signatures[depth][2])
+                iterator = allocation_candidates(row_count, len(signature_options[depth]))
+                iterators[depth] = iterator
+            base_counts = prefix_counts[depth]
+            increments = signature_increments[depth]
+            try:
+                allocation = next(iterator)
+            except StopIteration:
+                iterators[depth] = None
+                if depth == 0:
+                    depth = -1
+                else:
+                    depth -= 1
+                continue
+            self.work.global_solver_states += 1
+            self.work.global_solver_work += len(layout)
+            updated = apply_allocation(base_counts, increments, allocation)
+            if updated is None:
+                continue
+            if any(
+                updated[offset] + future_possible[depth + 1][offset] < minimum
+                for offset, (_, _, minimum, _) in enumerate(layout)
+            ):
+                continue
+            chosen[depth] = allocation
+            prefix_counts[depth + 1] = updated
+            depth += 1
+
+        if depth != len(signatures):
             raise self._global_component_error(component, constrained)
 
         labels: list[tuple[Any, ...] | None] = [None] * self.total
-        choice_rng = Random(seed_for_table(self.seed, f"{self.table_name}:component-ties"))
-        counts = initial_counts
-        for row_index, options_tuple in enumerate(row_groups):
-            options = list(options_tuple)
-            if not options:
-                continue
-            choice_rng.shuffle(options)
-            for group in options:
-                updated = incremented(row_index, group, counts)
-                if updated is not None and can_complete(row_index + 1, updated):
+        for signature_index, (_, _, rows) in enumerate(signatures):
+            signature_allocation = chosen[signature_index]
+            if signature_allocation is None:
+                raise AssertionError("la DP de firmas no conservó una solución")
+            ordered_rows = list(rows)
+            choice_rng.shuffle(ordered_rows)
+            cursor = 0
+            for group, amount in zip(
+                signature_options[signature_index], signature_allocation, strict=True
+            ):
+                for row_index in ordered_rows[cursor : cursor + amount]:
                     labels[row_index] = group
-                    counts = updated
-                    break
-            else:
-                raise AssertionError("la reconstrucción de la asignación global no progresó")
+                cursor += amount
+            if cursor != len(rows):
+                raise AssertionError("la DP de firmas no asignó todas las filas")
         component.group_labels = labels
         self._fill_group_quota_assignments(
             component,
@@ -980,6 +1056,7 @@ class TableAssigner:
                     second if right_quota else None,
                     rng,
                     self.table_name,
+                    self.work,
                 )
             )
         rng.shuffle(pairs)
@@ -1173,16 +1250,6 @@ def _quota_group_interval(
     return parent_count * minimum, parent_count * min(maximum, opposite_count)
 
 
-@dataclass
-class _FlowEdge:
-    """Arista residual de la circulación de un grupo de puente."""
-
-    to: int
-    reverse: int
-    capacity: int
-    initial_capacity: int
-
-
 def _build_group_pairs(
     lefts: list[int],
     rights: list[int],
@@ -1191,85 +1258,94 @@ def _build_group_pairs(
     right_quota: _RelationState | None,
     rng: Random,
     table_name: str,
+    work: _SelectionWork,
 ) -> list[tuple[int, int]]:
-    """Construct a simple bipartite b-matching with both degree bounds."""
-    if count == 0:
-        return []
+    """Construct a bounded simple b-matching without the complete edge graph."""
+    left_min, left_max = _bridge_degree_bounds(left_quota, len(rights))
+    right_min, right_max = _bridge_degree_bounds(right_quota, len(lefts))
+    if count < 0:
+        raise RuntimeError(f"tabla puente {table_name}: la cardinalidad solicitada es negativa.")
     if not lefts or not rights:
+        if count == 0 and left_min == right_min == 0:
+            work.bridge_quota_work += len(lefts) + len(rights)
+            return []
         raise RuntimeError(
             f"tabla puente {table_name}: no existe un emparejamiento simple compatible "
             "con las cuotas y la cardinalidad solicitada."
         )
 
-    left_min, left_max = _bridge_degree_bounds(left_quota, len(rights))
-    right_min, right_max = _bridge_degree_bounds(right_quota, len(lefts))
-    node_count = 2 + len(lefts) + len(rights)
-    source = 0
-    left_start = 1
-    right_start = left_start + len(lefts)
-    sink = right_start + len(rights)
-    graph: list[list[_FlowEdge]] = [[] for _ in range(node_count + 2)]
-    balance = [0] * len(graph)
+    left_degrees = _balanced_degree_sequence(
+        len(lefts), count, left_min, left_max, "izquierda", table_name, rng
+    )
+    right_degrees = _balanced_degree_sequence(
+        len(rights), count, right_min, right_max, "derecha", table_name, rng
+    )
+    work.bridge_quota_work += len(lefts) + len(rights)
 
-    def add_bounded_edge(start: int, end: int, lower: int, upper: int) -> int:
-        if lower > upper:
-            raise RuntimeError(
-                f"tabla puente {table_name}: las cotas [{lower}, {upper}] son incompatibles."
-            )
-        reference = _add_flow_edge(graph, start, end, upper - lower)
-        balance[start] -= lower
-        balance[end] += lower
-        return reference
-
-    for position in range(len(lefts)):
-        add_bounded_edge(source, left_start + position, left_min, left_max)
-    for position in range(len(rights)):
-        add_bounded_edge(right_start + position, sink, right_min, right_max)
-
-    # Randomization only affects edge insertion order. Max-flow feasibility is
-    # decided by the complete network, so a seed cannot turn a feasible network
-    # into an error.
     left_order = list(range(len(lefts)))
-    right_order = list(range(len(rights)))
     rng.shuffle(left_order)
-    rng.shuffle(right_order)
-    pair_references: dict[tuple[int, int], int] = {}
+    left_order.sort(key=lambda position: -left_degrees[position])
+    right_ties = list(range(len(rights)))
+    rng.shuffle(right_ties)
+    right_rank = {position: rank for rank, position in enumerate(right_ties)}
+    right_heap = [
+        (-degree, right_rank[position], position) for position, degree in enumerate(right_degrees)
+    ]
+    heapq.heapify(right_heap)
+    pairs: list[tuple[int, int]] = []
     for left_position in left_order:
-        for right_position in right_order:
-            pair_references[(left_position, right_position)] = add_bounded_edge(
-                left_start + left_position,
-                right_start + right_position,
-                0,
-                1,
-            )
-    add_bounded_edge(sink, source, count, count)
+        selected: list[tuple[int, int, int]] = []
+        for _ in range(left_degrees[left_position]):
+            work.bridge_quota_work += 1
+            if not right_heap or right_heap[0][0] >= 0:
+                raise RuntimeError(
+                    f"tabla puente {table_name}: no existe un emparejamiento simple "
+                    "compatible con ambas cuotas. Ajusta min/max."
+                )
+            negative_degree, tie, right_position = heapq.heappop(right_heap)
+            residual = -negative_degree - 1
+            pairs.append((lefts[left_position], rights[right_position]))
+            selected.append((residual, tie, right_position))
+            work.bridge_quota_work += 1
+        for residual, tie, right_position in selected:
+            heapq.heappush(right_heap, (-residual, tie, right_position))
+            work.bridge_quota_work += 1
 
-    super_source = node_count
-    super_sink = node_count + 1
-    required = 0
-    for node, amount in enumerate(balance[:node_count]):
-        if amount > 0:
-            _add_flow_edge(graph, super_source, node, amount)
-            required += amount
-        elif amount < 0:
-            _add_flow_edge(graph, node, super_sink, -amount)
-    if _max_flow(graph, super_source, super_sink) != required:
+    if len(pairs) != count or any(negative_degree != 0 for negative_degree, _, _ in right_heap):
         raise RuntimeError(
             f"tabla puente {table_name}: no existe un emparejamiento simple compatible "
             "con ambas cuotas. Ajusta min/max."
         )
-
-    pairs = [
-        (lefts[left_position], rights[right_position])
-        for (left_position, right_position), reference in pair_references.items()
-        if graph[left_start + left_position][reference].initial_capacity
-        - graph[left_start + left_position][reference].capacity
-    ]
-    if len(pairs) != count:
-        raise RuntimeError(
-            f"tabla puente {table_name}: la circulación no produjo exactamente {count} pares."
-        )
     return pairs
+
+
+def _balanced_degree_sequence(
+    parent_count: int,
+    total: int,
+    minimum: int,
+    maximum: int,
+    side: str,
+    table_name: str,
+    rng: Random,
+) -> list[int]:
+    """Return a near-regular degree sequence inside uniform bounds."""
+    if minimum > maximum or total < parent_count * minimum or total > parent_count * maximum:
+        raise RuntimeError(
+            f"tabla puente {table_name}: las cuotas de la parte {side} no permiten "
+            f"asignar {total} pares entre {parent_count} padres. Ajusta min/max."
+        )
+    base, remainder = divmod(total, parent_count)
+    if base < minimum or base + bool(remainder) > maximum:
+        raise RuntimeError(
+            f"tabla puente {table_name}: no existe una secuencia de grados factible para "
+            f"la parte {side}. Ajusta min/max."
+        )
+    degrees = [base] * parent_count
+    positions = list(range(parent_count))
+    rng.shuffle(positions)
+    for position in positions[:remainder]:
+        degrees[position] += 1
+    return degrees
 
 
 def _bridge_degree_bounds(state: _RelationState | None, opposite_count: int) -> tuple[int, int]:
@@ -1284,58 +1360,6 @@ def _bridge_degree_bounds(state: _RelationState | None, opposite_count: int) -> 
             f"solo admite {opposite_count} pares únicos."
         )
     return minimum, min(maximum, opposite_count)
-
-
-def _add_flow_edge(graph: list[list[_FlowEdge]], start: int, end: int, capacity: int) -> int:
-    """Add a residual edge and return its forward index."""
-    reference = len(graph[start])
-    reverse = len(graph[end])
-    graph[start].append(_FlowEdge(end, reverse, capacity, capacity))
-    graph[end].append(_FlowEdge(start, reference, 0, 0))
-    return reference
-
-
-def _max_flow(graph: list[list[_FlowEdge]], source: int, sink: int) -> int:
-    """Run deterministic Dinic max-flow over a residual graph."""
-    total = 0
-    while True:
-        levels = [-1] * len(graph)
-        levels[source] = 0
-        queue = [source]
-        for node in queue:
-            for edge in graph[node]:
-                if edge.capacity and levels[edge.to] < 0:
-                    levels[edge.to] = levels[node] + 1
-                    queue.append(edge.to)
-        if levels[sink] < 0:
-            return total
-        next_edge = [0] * len(graph)
-
-        while pushed := _send_flow(graph, levels, next_edge, source, sink, 1 << 60):
-            total += pushed
-
-
-def _send_flow(
-    graph: list[list[_FlowEdge]],
-    levels: list[int],
-    next_edge: list[int],
-    node: int,
-    sink: int,
-    flow: int,
-) -> int:
-    """Push one blocking-flow path in the current Dinic level graph."""
-    if node == sink:
-        return flow
-    while next_edge[node] < len(graph[node]):
-        edge = graph[node][next_edge[node]]
-        if edge.capacity and levels[edge.to] == levels[node] + 1:
-            pushed = _send_flow(graph, levels, next_edge, edge.to, sink, min(flow, edge.capacity))
-            if pushed:
-                edge.capacity -= pushed
-                graph[edge.to][edge.reverse].capacity += pushed
-                return pushed
-        next_edge[node] += 1
-    return 0
 
 
 def _marker(value: Any) -> Any:

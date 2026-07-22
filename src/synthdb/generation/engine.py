@@ -152,15 +152,25 @@ class _SelectionWork:
       compartidos; las proyecciones se construyen una vez por tabla.
     - ``bridge_pairs_examined``: pares de padres examinados por el asignador
       conjunto del puente; no se materializa el producto cartesiano completo.
+    - ``bridge_quota_work``: unidades de construcción/resolución del
+      b-matching con cuotas; incluye grados de padres y pares seleccionados.
+    - ``global_solver_work`` / ``global_solver_states``: filas, contribuciones
+      y alternativas inspeccionadas por el DP de firmas compartidas.
     """
 
     filter_scans: int = 0
     bridge_pairs_examined: int = 0
+    bridge_quota_work: int = 0
+    global_solver_work: int = 0
+    global_solver_states: int = 0
 
     def reset(self) -> None:
-        """Pone ambos contadores a cero al inicio de una generación."""
+        """Pone los contadores a cero al inicio de una generación."""
         self.filter_scans = 0
         self.bridge_pairs_examined = 0
+        self.bridge_quota_work = 0
+        self.global_solver_work = 0
+        self.global_solver_states = 0
 
 
 _SELECTION_WORK = _SelectionWork()

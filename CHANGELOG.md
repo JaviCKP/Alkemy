@@ -558,16 +558,19 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
     asignación global de grupos que conserva capacidad futura;
   - incorpora la capacidad de padres libres de `unique_subset` y el soporte de
     las relaciones obligatorias al rango de cada grupo, junto con las cotas
-    agregadas de todas las cuotas;
+    agregadas de todas las cuotas; el solver global agrupa filas por firma de
+    máscara activa y grupos candidatos y resuelve sus capacidades con un DP
+    iterativo cuya profundidad no depende del número de filas;
   - muestrea puentes uniformemente sin reemplazo por índice plano, sin
     materializar el producto cartesiano, y preserva cuotas de ambos lados con
-    una circulación conjunta de aristas de capacidad 1 y flujo total exacto,
-    sin preparar vectores de grados independientes;
+    un b-matching exacto de grados acotados realizado por Havel–Hakimi, cuyo
+    trabajo depende de padres y pares solicitados, no de `L×R`;
   - mantiene semillas jerárquicas, determinismo por `batch_size`, RI, unicidad y
     errores accionables para topologías o cuotas infactibles;
   - añade regresiones para los tres bloqueantes de la revisión, componentes de
     cuotas independientes, nulabilidad, cuotas a ambos lados del puente,
-    uniformidad 2×2 y cotas estructurales privadas lineales.
+    uniformidad 2×2, un oráculo exhaustivo completo para `L,R≤3`, regresiones
+    de 1.200/10.000 filas y cotas estructurales privadas lineales.
 
 - Issue #44: las autorreferencias compuestas multi-tenant se generan por niveles
   usando `nullable_columns` bajo `MATCH SIMPLE`/`MATCH FULL`; las FKs no

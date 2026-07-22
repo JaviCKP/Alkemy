@@ -45,16 +45,19 @@ coincidir, incumplir cuotas o reconstruir el producto cartesiano de un puente.
   conjuntos de `min/max` y la capacidad de los padres libres de cada
   `unique_subset`; las relaciones obligatorias también aportan soporte al
   rango. La etiqueta de grupo de todas las filas se resuelve globalmente antes
-  de escoger padres, incluidas las máscaras `NULL` distintas, y se rechaza de
-  forma estable cualquier combinación infactible; nunca se sustituye en
-  silencio el padre impuesto por una cuota.
+  de escoger padres mediante un DP iterativo que agrega filas por la firma de
+  relaciones activas y grupos candidatos; la profundidad del solver depende de
+  las firmas, no de la cardinalidad de la tabla. Se rechaza de forma estable
+  cualquier combinación infactible; nunca se sustituye en silencio el padre
+  impuesto por una cuota.
 - Una tabla puente sin cuotas muestrea, sin reemplazo, índices del espacio de
   pares compatibles mediante un índice plano y `unrank`; no materializa todo el
-  producto cartesiano. Si hay cuotas, una circulación con cotas inferiores y
-  superiores usa una arista de capacidad 1 por par compatible y fuerza el
-  flujo total de la tabla. El emparejamiento se obtiene conjuntamente, sin
-  construir dos secuencias de grados independientes; la semilla solo ordena
-  aristas factibles o desempata después de comprobar la circulación.
+  producto cartesiano. Si hay cuotas, cada grupo compatible se resuelve como
+  un b-matching bipartito completo: se construyen secuencias de grados casi
+  regulares dentro de las cotas y Havel–Hakimi las realiza con un heap,
+  examinando únicamente los padres y los pares solicitados. No se guarda una
+  arista por combinación `L×R`; la semilla solo desempata soluciones ya
+  factibles y nunca decide la factibilidad.
 - Todas las rutas usan semillas jerárquicas estables por tabla, relación,
   grupo y puente. La instrumentación de trabajo (`engine._SELECTION_WORK`) es
   privada y solo sirve para comprobar la complejidad estructural en tests.
@@ -70,5 +73,6 @@ asignaciones que llegan a la validación estructural ya respetan las claves
 compuestas, RI, unicidad, `NULL` y cuotas; una contradicción de topología,
 cardinalidad o cuota produce un `GenerationError` que nombra la tabla y la
 causa. Las regresiones cubren máscaras de `NULL` independientes, componentes
-conexas, puentes uniformes y cuotas a ambos lados, además de cotas de trabajo
-lineales sin ampliar la API pública.
+conexas, el solver a 1.200/10.000 filas, puentes uniformes y cuotas a ambos
+lados con un oráculo exhaustivo pequeño y sondas lineales 200/800/1.600/3.200,
+sin ampliar la API pública.
