@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import bisect
 import heapq
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from random import Random
 from typing import Any, Protocol
@@ -37,6 +37,7 @@ class _SelectionWork(Protocol):
     filter_scans: int
     bridge_pairs_examined: int
     bridge_quota_work: int
+    compound_pairs_examined: int
     global_solver_work: int
     global_solver_states: int
 
@@ -57,6 +58,20 @@ class AssignmentRelation:
     def key(self) -> FkKey:
         """Devuelve la clave estable de la FK."""
         return tuple(self.fk.columns)
+
+
+@dataclass(frozen=True)
+class CompoundUniqueConstraint:
+    """Contrato privado de una restricción cubierta por varias FKs.
+
+    ``relations`` contiene todas las FKs compatibles con la restricción;
+    ``dimensions`` contiene solo las que aportan columnas propias a su
+    proyección y, por tanto, multiplican su capacidad.
+    """
+
+    columns: tuple[str, ...]
+    relations: tuple[FkKey, ...]
+    dimensions: tuple[FkKey, ...] = ()
 
 
 @dataclass
@@ -102,6 +117,7 @@ class TableAssigner:
         error_factory: ErrorFactory,
         work: _SelectionWork,
         deferred_null_columns: frozenset[str] = frozenset(),
+        compound_unique_constraints: tuple[CompoundUniqueConstraint, ...] = (),
     ) -> None:
         self.table_name = table_name
         self.table_kind = table_kind
@@ -113,6 +129,7 @@ class TableAssigner:
         self._error = error_factory
         self.work = work
         self.deferred_null_columns = deferred_null_columns
+        self.compound_unique_constraints = compound_unique_constraints
         self.states = {
             relation.key: _RelationState(
                 relation=relation,
@@ -136,12 +153,19 @@ class TableAssigner:
             return self._row_assignments, [rng.getstate() for rng in self.row_rngs]
 
         self._prepare(validate_only=False)
-        if self.table_kind == "bridge" and len(self.relations) >= 2:
+        if self.compound_unique_constraints:
+            assignments = self._assign_compound_unique_constraints()
+        elif self.table_kind == "bridge" and len(self.relations) >= 2:
             assignments = self._assign_bridge()
         else:
             assignments = [{} for _ in range(self.total)]
             for row_index, rng in enumerate(self.row_rngs):
                 assignments[row_index] = self.assign_row(row_index, rng)
+        if self.compound_unique_constraints:
+            for row_index, rng in enumerate(self.row_rngs):
+                assignments[row_index].update(
+                    self._assign_row_with_fixed(row_index, rng, assignments[row_index])
+                )
         self._row_assignments = assignments
         return assignments, [rng.getstate() for rng in self.row_rngs]
 
@@ -162,6 +186,12 @@ class TableAssigner:
             raise self._error(
                 f"tabla puente {self.table_name}: la asignación conjunta de un puente "
                 "no admite generación fila a fila. Usa la fase normal de inserción."
+            )
+        if self.compound_unique_constraints:
+            raise self._error(
+                f"tabla {self.table_name}: las restricciones compuestas cubiertas por "
+                "varias FKs requieren asignación por tabla completa; no se pueden "
+                "resolver en una generación fila a fila."
             )
 
         values = initial_values or {}
@@ -185,13 +215,22 @@ class TableAssigner:
         if self._prepared:
             return
         self._validate_topology()
-        if self.table_kind == "bridge" and len(self.relations) >= 2:
+        if (
+            self.table_kind == "bridge"
+            and len(self.relations) >= 2
+            and not self.compound_unique_constraints
+        ):
             self._prepared = True
             return
 
         self._prepare_null_masks()
+        compound_relation_keys = self._compound_relation_keys()
         for component in self.components:
-            self._prepare_component(component, validate_only=validate_only)
+            self._prepare_component(
+                component,
+                validate_only=validate_only,
+                managed_excluded=compound_relation_keys,
+            )
         self._prepared = True
 
     def _validate_topology(self) -> None:
@@ -228,9 +267,16 @@ class TableAssigner:
             else:
                 state.null_rows = [False] * self.total
 
-    def _prepare_component(self, component: _Component, *, validate_only: bool) -> None:
+    def _prepare_component(
+        self,
+        component: _Component,
+        *,
+        validate_only: bool,
+        managed_excluded: set[FkKey] | frozenset[FkKey] = frozenset(),
+    ) -> None:
         if len(component.states) == 1:
-            self._prepare_single_quota(component.states[0])
+            if component.states[0].key not in managed_excluded:
+                self._prepare_single_quota(component.states[0])
             return
 
         common = set(component.states[0].relation.fk.columns)
@@ -243,11 +289,12 @@ class TableAssigner:
         managed_states = [
             state
             for state in component.states
-            if state.relation.strategy in {"quota", "unique_subset"}
+            if state.key not in managed_excluded
+            and state.relation.strategy in {"quota", "unique_subset"}
         ]
         if managed_states and not validate_only:
-            self._prepare_managed_component(component)
-        elif any(state.relation.strategy == "quota" for state in component.states):
+            self._prepare_managed_component(component, managed_excluded)
+        elif any(state.relation.strategy == "quota" for state in managed_states):
             # A leveled table supplies a discriminator per row. Its external FK
             # quotas are deliberately rejected before they can be silently
             # reassigned against that row-specific value.
@@ -266,9 +313,15 @@ class TableAssigner:
         non_null = [index for index, is_null in enumerate(state.null_rows) if not is_null]
         state.quota = self._quota_for_rows(state, non_null)
 
-    def _prepare_managed_component(self, component: _Component) -> None:
+    def _prepare_managed_component(
+        self, component: _Component, managed_excluded: set[FkKey] | frozenset[FkKey]
+    ) -> None:
         """Assign shared groups globally for quota and without-replacement FKs."""
-        constrained = [state for state in component.states if _is_group_constraint_state(state)]
+        constrained = [
+            state
+            for state in component.states
+            if state.key not in managed_excluded and _is_group_constraint_state(state)
+        ]
         active_sets = {
             tuple(
                 row_index for row_index in range(self.total) if self._state_active(state, row_index)
@@ -782,14 +835,21 @@ class TableAssigner:
         initial_values: dict[str, Any],
         *,
         locked: bool = False,
+        fixed_assignments: Mapping[FkKey, int | None] | None = None,
     ) -> dict[FkKey, int | None]:
+        fixed = fixed_assignments or {}
         if locked and any(
             self.deferred_null_columns.intersection(state.relation.fk.columns)
             for state in component.states
         ):
-            return {state.key: None for state in component.states}
+            return {
+                state.key: fixed.get(state.key) if state.key in fixed else None
+                for state in component.states
+            }
         if len(component.states) == 1:
             state = component.states[0]
+            if state.key in fixed:
+                return {state.key: fixed[state.key]}
             return {state.key: self._assign_single_row(state, row_index, rng, initial_values)}
 
         active = [
@@ -803,7 +863,21 @@ class TableAssigner:
         label = component.group_labels[row_index] if component.group_labels is not None else None
         group = self._choose_group(component, active, row_index, rng, initial_values, label)
         assignments: dict[FkKey, int | None] = {}
+        selected: int | None
         for state in component.states:
+            if state.key in fixed:
+                selected = fixed[state.key]
+                if selected is not None:
+                    candidates = self._candidate_indices(state, group, initial_values)
+                    if selected not in candidates:
+                        raise self._error(
+                            f"tabla {self.table_name}, FK ({', '.join(state.key)}): "
+                            f"la asignación conjunta fijó el padre índice {selected}, "
+                            f"pero la fila {row_index} no es compatible con el "
+                            "discriminador o las columnas locales compartidas."
+                        )
+                assignments[state.key] = selected
+                continue
             if (
                 state.relation.unresolved
                 or (state.relation.allow_missing_parents and not state.relation.parent_rows)
@@ -812,7 +886,6 @@ class TableAssigner:
                 assignments[state.key] = None
                 continue
             candidates = self._candidate_indices(state, group, initial_values)
-            selected: int | None
             if state.relation.strategy == "quota":
                 if state.quota is None:
                     raise self._error(
@@ -833,6 +906,33 @@ class TableAssigner:
                 raise self._incompatible_row_error(component, row_index, state)
             assignments[state.key] = selected
         self._record_group_values(component, row_index, group, initial_values)
+        return assignments
+
+    def _assign_row_with_fixed(
+        self,
+        row_index: int,
+        rng: Random,
+        fixed_assignments: Mapping[FkKey, int | None],
+    ) -> dict[FkKey, int | None]:
+        """Completa una fila respetando FKs ya fijadas por una restricción."""
+        initial_values = self.local_values_by_row[row_index]
+        assignments: dict[FkKey, int | None] = {}
+        locked = bool(self.deferred_null_columns) and all(
+            initial_values.get(column) is None for column in self.deferred_null_columns
+        )
+        for component in self.components:
+            assignments.update(
+                self._assign_component_row(
+                    component,
+                    row_index,
+                    rng,
+                    initial_values,
+                    locked=locked,
+                    fixed_assignments=fixed_assignments,
+                )
+            )
+        if self.deferred_relation:
+            assignments[self.deferred_relation] = None
         return assignments
 
     def _assign_single_row(
@@ -1082,6 +1182,332 @@ class TableAssigner:
             return key[position]
         return candidates[rng.randrange(len(candidates))]
 
+    def _compound_relation_keys(self) -> set[FkKey]:
+        """Return the FK keys participating in a compound-UNIQUE contract."""
+        return {
+            relation
+            for constraint in self.compound_unique_constraints
+            for relation in (constraint.dimensions or constraint.relations)
+        }
+
+    def _assign_compound_unique_constraints(
+        self,
+    ) -> list[dict[FkKey, int | None]]:
+        """Build assignments for every contracted UNIQUE without replacement."""
+        assignments: list[dict[FkKey, int | None]] = [{} for _ in range(self.total)]
+        by_relations: dict[tuple[FkKey, ...], list[CompoundUniqueConstraint]] = {}
+        for constraint in self.compound_unique_constraints:
+            relation_keys = constraint.dimensions or constraint.relations
+            if len(constraint.columns) < 2 or len(relation_keys) < 2:
+                raise self._error(
+                    f"tabla {self.table_name}: la restricción compuesta "
+                    f"({', '.join(constraint.columns)}) no tiene al menos dos FKs "
+                    "implicadas."
+                )
+            missing = [key for key in relation_keys if key not in self.states]
+            if missing:
+                raise self._error(
+                    f"tabla {self.table_name}: la restricción compuesta "
+                    f"({', '.join(constraint.columns)}) requiere FKs no disponibles "
+                    f"({', '.join(', '.join(key) for key in missing)})."
+                )
+            by_relations.setdefault(relation_keys, []).append(constraint)
+
+        relation_groups = list(by_relations)
+        for index, left_group in enumerate(relation_groups):
+            left_components = {
+                component_index
+                for component_index, component in enumerate(self.components)
+                if any(state.key in left_group for state in component.states)
+            }
+            for right_group in relation_groups[index + 1 :]:
+                right_components = {
+                    component_index
+                    for component_index, component in enumerate(self.components)
+                    if any(state.key in right_group for state in component.states)
+                }
+                if left_components.intersection(right_components):
+                    left_text = "; ".join(
+                        f"({', '.join(item.columns)})" for item in by_relations[left_group]
+                    )
+                    right_text = "; ".join(
+                        f"({', '.join(item.columns)})" for item in by_relations[right_group]
+                    )
+                    raise self._error(
+                        f"tabla {self.table_name}: las restricciones compuestas "
+                        f"{left_text} y {right_text} comparten una componente de FKs "
+                        "y no tienen una asignación conjunta segura. Ajusta las "
+                        "restricciones o la cardinalidad antes de generar."
+                    )
+
+        for relation_keys, constraints in by_relations.items():
+            if len(relation_keys) != 2:
+                self._assign_product_constraints(assignments, relation_keys, constraints)
+            else:
+                self._assign_pair_constraints(assignments, relation_keys, constraints)
+        return assignments
+
+    def _assign_product_constraints(
+        self,
+        assignments: list[dict[FkKey, int | None]],
+        relation_keys: tuple[FkKey, ...],
+        constraints: Sequence[CompoundUniqueConstraint],
+    ) -> None:
+        """Assign a uniform/unique-subset product for three or more FKs.
+
+        The product is addressed by mixed-radix ranks, so the complete
+        Cartesian edge set is never built. Quotas and mixed limited strategies
+        remain on the binary Havel--Hakimi path; rejecting those combinations
+        here is safer than silently weakening their contract.
+        """
+        states = [self.states[key] for key in relation_keys]
+        if any(state.relation.strategy == "quota" for state in states):
+            raise self._error(
+                f"tabla {self.table_name}: las restricciones compuestas "
+                f"({'; '.join(', '.join(item.columns) for item in constraints)}) "
+                "con tres o más FKs no admiten quota todavía; ajusta la estrategia "
+                "o separa la restricción antes de generar."
+            )
+        strategies = {state.relation.strategy for state in states}
+        if "unique_subset" in strategies and strategies != {"unique_subset"}:
+            raise self._error(
+                f"tabla {self.table_name}: las restricciones compuestas "
+                f"({'; '.join(', '.join(item.columns) for item in constraints)}) "
+                "mezclan unique_subset con estrategias sin límite en tres o más "
+                "FKs; no existe una asignación segura para ese contrato."
+            )
+        active_rows = [
+            row_index
+            for row_index in range(self.total)
+            if all(
+                not state.relation.unresolved
+                and not state.null_rows[row_index]
+                and not (state.relation.allow_missing_parents and not state.relation.parent_rows)
+                and bool(state.relation.parent_rows)
+                for state in states
+            )
+        ]
+        if not active_rows:
+            return
+
+        common = set(states[0].relation.fk.columns)
+        for state in states[1:]:
+            common.intersection_update(state.relation.fk.columns)
+        raw_groups: dict[tuple[Any, ...], tuple[list[int], ...]]
+        if common:
+            grouped = [
+                _group_parent_indices(state.relation, tuple(sorted(common))) for state in states
+            ]
+            labels = set(grouped[0])
+            for groups in grouped[1:]:
+                labels.intersection_update(groups)
+            raw_groups = {
+                label: tuple(groups[label] for groups in grouped)
+                for label in _stable_group_order({label: [] for label in labels})
+            }
+        else:
+            raw_groups = {
+                (): tuple(list(state.all_indices) for state in states),
+            }
+
+        options_by_group: dict[tuple[Any, ...], tuple[list[int], ...]] = {}
+        for label, raw_options in raw_groups.items():
+            options_by_group[label] = tuple(
+                _distinct_parent_indices(
+                    state,
+                    indices,
+                    constraints,
+                    relation_keys.index(state.key),
+                    relation_keys,
+                )
+                for state, indices in zip(states, raw_options, strict=True)
+            )
+        capacities = {
+            label: (
+                min(len(options) for options in options_by_group[label])
+                if strategies == {"unique_subset"}
+                else _product_size(options_by_group[label])
+            )
+            for label in options_by_group
+        }
+        capacity = sum(capacities.values())
+        constraint_text = "; ".join(
+            f"({', '.join(constraint.columns)})" for constraint in constraints
+        )
+        if len(active_rows) > capacity:
+            raise self._error(
+                f"tabla {self.table_name}: la restricción {constraint_text} solicita "
+                f"{len(active_rows)} filas activas pero solo tiene "
+                f"{_compound_capacity_text(capacity)} "
+                "sin repetición. Reduce las filas "
+                "solicitadas o añade padres compatibles."
+            )
+        pair_rng = Random(
+            seed_for_table(
+                self.seed,
+                f"{self.table_name}:compound:"
+                f"{','.join(','.join(item.columns) for item in constraints)}",
+            )
+        )
+        if strategies == {"unique_subset"}:
+            ranges = {label: (0, value) for label, value in capacities.items()}
+            order = _stable_group_order(ranges)
+            counts = _distribute_counts(order, ranges, len(active_rows), pair_rng)
+            tuples: list[tuple[int, ...]] = []
+            for label in order:
+                options = [list(items) for items in options_by_group[label]]
+                for items in options:
+                    pair_rng.shuffle(items)
+                tuples.extend(
+                    tuple(items[position] for items in options) for position in range(counts[label])
+                )
+        else:
+            tuples = _sample_uniform_tuples(options_by_group, len(active_rows), pair_rng)
+        if len(tuples) != len(active_rows):
+            raise self._error(
+                f"tabla {self.table_name}: la restricción {constraint_text} solo "
+                f"produjo {len(tuples)} de {len(active_rows)} asignaciones requeridas."
+            )
+        self.work.compound_pairs_examined += len(tuples)
+        for row_index, selected in zip(active_rows, tuples, strict=True):
+            for state, parent_index in zip(states, selected, strict=True):
+                assignments[row_index][state.key] = parent_index
+                if state.relation.strategy == "unique_subset":
+                    if state.unique_remaining is None or parent_index not in state.unique_remaining:
+                        raise self._error(
+                            f"tabla {self.table_name}: la restricción {constraint_text} "
+                            f"reutilizaría el padre índice {parent_index} de la FK "
+                            f"({', '.join(state.key)}) pese a unique_subset."
+                        )
+                    state.unique_remaining.remove(parent_index)
+                self._record_parent_values(row_index, state, parent_index)
+
+    def _assign_pair_constraints(
+        self,
+        assignments: list[dict[FkKey, int | None]],
+        relation_keys: tuple[FkKey, ...],
+        constraints: Sequence[CompoundUniqueConstraint],
+    ) -> None:
+        """Assign one binary family of compound UNIQUE constraints."""
+        first = self.states[relation_keys[0]]
+        second = self.states[relation_keys[1]]
+        active_rows = [
+            row_index
+            for row_index in range(self.total)
+            if all(
+                not state.relation.unresolved
+                and not state.null_rows[row_index]
+                and not (state.relation.allow_missing_parents and not state.relation.parent_rows)
+                and bool(state.relation.parent_rows)
+                for state in (first, second)
+            )
+        ]
+        if not active_rows:
+            return
+
+        shared = [
+            column for column in first.relation.fk.columns if column in second.relation.fk.columns
+        ]
+        groups = _projected_pair_groups(
+            first,
+            second,
+            shared,
+            constraints,
+            relation_keys,
+        )
+        available = sum(len(lefts) * len(rights) for lefts, rights in groups.values())
+        constraint_text = "; ".join(
+            f"({', '.join(constraint.columns)})" for constraint in constraints
+        )
+        if len(active_rows) > available:
+            raise self._error(
+                f"tabla {self.table_name}: la restricción {constraint_text} solicita "
+                f"{len(active_rows)} filas activas pero solo tiene "
+                f"{_compound_capacity_text(available)} "
+                "sin repetición. Reduce las filas "
+                "solicitadas o añade padres compatibles."
+            )
+
+        left_limited = _is_degree_limited(first)
+        right_limited = _is_degree_limited(second)
+        pair_rng = Random(
+            seed_for_table(
+                self.seed,
+                f"{self.table_name}:compound:"
+                f"{','.join(','.join(item.columns) for item in constraints)}",
+            )
+        )
+        try:
+            if not left_limited and not right_limited:
+                pairs = _sample_uniform_pairs(groups, len(active_rows), pair_rng)
+            else:
+                pairs = self._quota_bridge_pairs(
+                    first,
+                    second,
+                    groups,
+                    len(active_rows),
+                    pair_rng,
+                    left_limited,
+                    right_limited,
+                )
+        except (QuotaInfeasibleError, RuntimeError, ValueError) as exc:
+            table_label = (
+                f"tabla puente {self.table_name}"
+                if self.table_kind == "bridge"
+                else f"tabla {self.table_name}"
+            )
+            detail = str(exc)
+            if self.table_kind != "bridge":
+                detail = detail.replace(f"tabla puente {self.table_name}", table_label, 1)
+            raise self._error(
+                f"{table_label}: la restricción {constraint_text} no tiene "
+                f"una asignación conjunta factible para {len(active_rows)} filas: {detail}"
+            ) from exc
+
+        if len(pairs) != len(active_rows):
+            raise self._error(
+                f"tabla {self.table_name}: la restricción {constraint_text} solo "
+                f"produjo {len(pairs)} de {len(active_rows)} asignaciones requeridas."
+            )
+        self.work.compound_pairs_examined += len(pairs)
+        if self.table_kind == "bridge":
+            self.work.bridge_pairs_examined += len(pairs)
+        pair_by_row = list(zip(active_rows, pairs, strict=True))
+        pair_by_row.sort(key=lambda item: item[0])
+        for row_index, (left_index, right_index) in pair_by_row:
+            assignments[row_index][first.key] = left_index
+            assignments[row_index][second.key] = right_index
+            for state, parent_index in ((first, left_index), (second, right_index)):
+                if state.relation.strategy == "unique_subset":
+                    if state.unique_remaining is None or parent_index not in state.unique_remaining:
+                        raise self._error(
+                            f"tabla {self.table_name}: la restricción {constraint_text} "
+                            f"reutilizaría el padre índice {parent_index} de la FK "
+                            f"({', '.join(state.key)}) pese a unique_subset."
+                        )
+                    state.unique_remaining.remove(parent_index)
+            self._record_parent_values(row_index, first, left_index)
+            self._record_parent_values(row_index, second, right_index)
+
+    def _record_parent_values(
+        self, row_index: int, state: _RelationState, parent_index: int
+    ) -> None:
+        """Expose contracted FK values to other relations in the same row."""
+        refs = dict(zip(state.relation.fk.columns, state.relation.fk.ref_columns, strict=True))
+        parent = state.relation.parent_rows[parent_index]
+        for local, ref in refs.items():
+            value = parent.get(ref)
+            if value is None:
+                continue
+            existing = self.local_values_by_row[row_index].get(local)
+            if existing is not None and existing != value:
+                raise self._error(
+                    f"tabla {self.table_name}: las restricciones compuestas fijan "
+                    f"valores incompatibles para la columna compartida '{local}' "
+                    f"en la fila {row_index}: {existing!r} y {value!r}."
+                )
+            self.local_values_by_row[row_index][local] = value
+
     def _assign_bridge(self) -> list[dict[FkKey, int | None]]:
         if len(self.relations) != 2:
             raise self._error(
@@ -1106,15 +1532,15 @@ class TableAssigner:
                 "cardinalidad o añade filas padre compatibles."
             )
 
-        left_quota = first.relation.strategy == "quota"
-        right_quota = second.relation.strategy == "quota"
+        left_limited = _is_degree_limited(first)
+        right_limited = _is_degree_limited(second)
         bridge_rng = Random(seed_for_table(self.seed, f"{self.table_name}:bridge"))
         try:
-            if not left_quota and not right_quota:
+            if not left_limited and not right_limited:
                 pairs = _sample_uniform_pairs(groups, self.total, bridge_rng)
             else:
                 pairs = self._quota_bridge_pairs(
-                    first, second, groups, self.total, bridge_rng, left_quota, right_quota
+                    first, second, groups, self.total, bridge_rng, left_limited, right_limited
                 )
         except (QuotaInfeasibleError, RuntimeError, ValueError) as exc:
             raise self._error(
@@ -1131,18 +1557,18 @@ class TableAssigner:
         groups: dict[tuple[Any, ...], tuple[list[int], list[int]]],
         total: int,
         rng: Random,
-        left_quota: bool,
-        right_quota: bool,
+        left_limited: bool,
+        right_limited: bool,
     ) -> list[tuple[int, int]]:
         ranges: dict[tuple[Any, ...], tuple[int, int]] = {}
         for group, (lefts, rights) in groups.items():
             capacity = len(lefts) * len(rights)
             intervals = [(0, capacity)]
-            if left_quota:
+            if left_limited:
                 intervals.append(
                     _quota_group_interval(first, len(lefts), len(rights), self.table_name)
                 )
-            if right_quota:
+            if right_limited:
                 intervals.append(
                     _quota_group_interval(second, len(rights), len(lefts), self.table_name)
                 )
@@ -1179,8 +1605,8 @@ class TableAssigner:
                     lefts,
                     rights,
                     counts[group],
-                    first if left_quota else None,
-                    second if right_quota else None,
+                    first if left_limited else None,
+                    second if right_limited else None,
                     rng,
                     self.table_name,
                     self.work,
@@ -1334,6 +1760,24 @@ def _bridge_groups(
     }
 
 
+def _projected_pair_groups(
+    first: _RelationState,
+    second: _RelationState,
+    shared: Sequence[str],
+    constraints: Sequence[CompoundUniqueConstraint],
+    relation_keys: Sequence[FkKey],
+) -> dict[tuple[Any, ...], tuple[list[int], list[int]]]:
+    """Group binary parents and collapse duplicate UNIQUE projections."""
+    raw_groups = _bridge_groups(first, second, shared)
+    return {
+        group: (
+            _distinct_parent_indices(first, lefts, constraints, 0, relation_keys),
+            _distinct_parent_indices(second, rights, constraints, 1, relation_keys),
+        )
+        for group, (lefts, rights) in raw_groups.items()
+    }
+
+
 def _sample_uniform_pairs(
     groups: dict[tuple[Any, ...], tuple[list[int], list[int]]],
     count: int,
@@ -1361,12 +1805,87 @@ def _sample_uniform_pairs(
     return pairs
 
 
+def _distinct_parent_indices(
+    state: _RelationState,
+    indices: Sequence[int],
+    constraints: Sequence[CompoundUniqueConstraint],
+    relation_position: int,
+    relation_keys: Sequence[FkKey],
+) -> list[int]:
+    """Keep one parent for each projected compound-UNIQUE contribution."""
+    refs = dict(zip(state.relation.fk.columns, state.relation.fk.ref_columns, strict=True))
+    projections: dict[tuple[tuple[int, str, Any], ...], int] = {}
+    for index in indices:
+        parent = state.relation.parent_rows[index]
+        projection_parts: list[tuple[int, str, Any]] = []
+        for constraint_index, constraint in enumerate(constraints):
+            for column in constraint.columns:
+                owner = next(
+                    position
+                    for position, relation_key in enumerate(relation_keys)
+                    if column in relation_key
+                )
+                if owner == relation_position:
+                    projection_parts.append(
+                        (constraint_index, column, _marker(parent.get(refs[column])))
+                    )
+        projection = tuple(projection_parts)
+        projections.setdefault(projection, index)
+    return list(projections.values())
+
+
+def _product_size(options: Sequence[Sequence[int]]) -> int:
+    """Return a mixed-radix product without constructing its tuples."""
+    result = 1
+    for items in options:
+        result *= len(items)
+    return result
+
+
+def _compound_capacity_text(capacity: int) -> str:
+    """Describe a compound UNIQUE capacity with stable singular/plural wording."""
+    if capacity == 1:
+        return "capacidad 1 (1 combinación compatible)"
+    return f"capacidad {capacity} ({capacity} combinaciones compatibles)"
+
+
+def _sample_uniform_tuples(
+    groups: dict[tuple[Any, ...], tuple[list[int], ...]],
+    count: int,
+    rng: Random,
+) -> list[tuple[int, ...]]:
+    """Sample distinct mixed-radix tuples without materializing the product."""
+    order = _stable_group_order(groups)
+    prefixes: list[int] = []
+    total = 0
+    for group in order:
+        total += _product_size(groups[group])
+        prefixes.append(total)
+    if count > total:
+        raise ValueError("se solicitaron más tuplas que las disponibles")
+    selected = rng.sample(range(total), count)
+    tuples: list[tuple[int, ...]] = []
+    for flat in selected:
+        group_index = bisect.bisect_right(prefixes, flat)
+        previous = prefixes[group_index - 1] if group_index else 0
+        options = groups[order[group_index]]
+        offset = flat - previous
+        values: list[int] = []
+        for items in reversed(options):
+            offset, position = divmod(offset, len(items))
+            values.append(items[position])
+        tuples.append(tuple(reversed(values)))
+    return tuples
+
+
 def _quota_group_interval(
     state: _RelationState,
     parent_count: int,
     opposite_count: int,
     table_name: str,
 ) -> tuple[int, int]:
+    if getattr(state.relation, "strategy", "quota") == "unique_subset":
+        return 0, parent_count
     minimum = int(state.relation.params["min"])
     maximum = int(state.relation.params["max"])
     if minimum > opposite_count:
@@ -1479,6 +1998,8 @@ def _bridge_degree_bounds(state: _RelationState | None, opposite_count: int) -> 
     """Return per-parent degree bounds, including simple-edge capacity."""
     if state is None:
         return 0, opposite_count
+    if getattr(state.relation, "strategy", "quota") == "unique_subset":
+        return 0, min(1, opposite_count)
     minimum = int(state.relation.params["min"])
     maximum = int(state.relation.params["max"])
     if minimum > opposite_count:
@@ -1487,6 +2008,11 @@ def _bridge_degree_bounds(state: _RelationState | None, opposite_count: int) -> 
             f"solo admite {opposite_count} pares únicos."
         )
     return minimum, min(maximum, opposite_count)
+
+
+def _is_degree_limited(state: _RelationState) -> bool:
+    """Return whether a FK strategy imposes a per-parent degree bound."""
+    return state.relation.strategy in {"quota", "unique_subset"}
 
 
 def _marker(value: Any) -> Any:

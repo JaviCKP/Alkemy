@@ -548,13 +548,27 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Fixed
 
+- PR #49 (correction): compound UNIQUE contracts also govern bridge tables and
+  calculate capacity over the exact UNIQUE projection, deduplicating physical
+  parent versions. FKs that share only the discriminator remain compatibility
+  relations without becoming uniqueness dimensions; their quotas,
+  `unique_subset`, nullability, and RI are still prepared for the component.
+
 - Issue #46: la heurística `codigo` selecciona `sequence` para columnas
   `INTEGER` y conserva `template` para tipos textuales. El fusor comprueba las
   propuestas heurísticas contra el `TypeSpec`: una incompatibilidad cae al
   `fallback` seguro con un aviso que identifica tabla, columna, generador y
   tipo. Las elecciones explícitas del YAML y la prioridad usuario > IR >
   heurística > fallback no cambian. El dry-run integral del schema inmobiliario
-  real queda bloqueado por el defecto independiente registrado en #47.
+  real requiere la asignacion conjunta de #47; las limitaciones restantes de
+  ese esquema quedan fuera del alcance de este Hito.
+
+- Issue #47: las PK/UNIQUE compuestas cuyas columnas están cubiertas por varias
+  FKs se derivan como contratos privados del `TableSpec` y se asignan sin
+  reemplazo también en tablas regulares. Se conservan discriminadores
+  compartidos, estrategias `uniform`, `quota` y `unique_subset`, nulabilidad,
+  determinismo por lote y errores de cardinalidad antes de generar filas, sin
+  cambiar `TableSpec.kind` ni la IR.
 
 - PR #45 — refactor de la selección de FKs compuestas compartidas en un
   `TableAssigner` privado (`generation/_table_assignment.py`), sin tocar la IR
