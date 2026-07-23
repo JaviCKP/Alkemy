@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from baseline import build_baseline
 from ruamel.yaml import YAML
 
 _FIXTURES = Path(__file__).parent / "fixtures"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_recorded_baseline_matches_common_evaluation_route() -> None:
@@ -37,4 +39,6 @@ def test_human_label_review_is_prepared_but_still_pending() -> None:
     assert review["reviewed_at"] is None
     assert review["decision"] == "pending"
     assert len(review["population"]) == 6
-    assert all(len(item["sha256"]) == 64 for item in review["population"])
+    for item in review["population"]:
+        source = _REPO_ROOT / item["source"]
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == item["sha256"]

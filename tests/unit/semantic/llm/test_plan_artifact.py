@@ -84,6 +84,7 @@ def test_canonical_roundtrip_is_byte_stable() -> None:
 
     assert decoded.canonical_bytes() == encoded
     assert decoded.fingerprint == artifact.fingerprint
+    assert decoded.audit_fingerprint == artifact.audit_fingerprint
 
 
 @pytest.mark.parametrize(
@@ -107,6 +108,8 @@ def test_timestamp_tokens_latency_and_diagnostics_do_not_alter_fingerprint() -> 
 
     assert second.fingerprint == first.fingerprint
     assert second_with_new_text.fingerprint == first.fingerprint
+    assert second.audit_fingerprint == first.audit_fingerprint
+    assert second_with_new_text.audit_fingerprint == first.audit_fingerprint
 
 
 def _change_schema_hash(payload: dict[str, Any]) -> None:
@@ -189,6 +192,25 @@ def test_unknown_artifact_or_canonicalization_version_is_rejected() -> None:
 
     payload = _artifact().model_dump(mode="json")
     payload["canonicalization_version"] = "plan-canonicalization/99"
+    with pytest.raises(ValidationError):
+        ResolvedPlanArtifact.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "unknown"),
+    [
+        ("rule_dsl_version", "rule-dsl/99"),
+        ("generator_catalog_version", "generator-catalog/99"),
+        ("seed_derivation_version", "seed-derivation/99"),
+    ],
+)
+def test_unknown_runtime_semantics_version_is_rejected(
+    field: str,
+    unknown: str,
+) -> None:
+    payload = _artifact().model_dump(mode="json")
+    payload[field] = unknown
+
     with pytest.raises(ValidationError):
         ResolvedPlanArtifact.model_validate(payload)
 

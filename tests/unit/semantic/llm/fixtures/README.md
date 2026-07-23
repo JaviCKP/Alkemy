@@ -18,4 +18,6 @@ Esta población corrige dos asimetrías anteriores:
 No se añaden métricas: siguen siendo exactitud de rol y de generador. Las labels
 históricas se leen sin modificarlas y continúan marcadas como no definitivas.
 `labels_review_v1.yaml` deja preparado el segundo repaso humano independiente,
-con hashes de las seis fuentes y estado `pending_human_second_review`.
+con hashes de las seis fuentes y estado `pending_human_second_review`. El test
+recalcula cada SHA-256 desde su `source`, por lo que CI detecta si el manifiesto
+queda obsoleto.

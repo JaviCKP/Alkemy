@@ -5,9 +5,10 @@ Este módulo define una segunda forma deliberadamente distinta:
 ``ResolvedPlanArtifact``. Sus generadores ya usan los modelos de parámetros del
 motor actual y pueden convertirse al ``TablePlans`` que este consume.
 
-El fingerprint cubre versiones, hash de la IR y todas las tablas, columnas y
-decisiones resueltas. ``ArtifactDiagnostics`` queda fuera por contrato: fecha,
-tokens, latencia y mensajes sirven para auditoría, no cambian la ejecución.
+``fingerprint`` cubre versiones, hash de la IR y la proyección ejecutable.
+``audit_fingerprint`` añade fuente, confianza y rol para sellar la trazabilidad.
+``ArtifactDiagnostics`` queda fuera de ambas: fecha, tokens, latencia y mensajes
+sirven para observabilidad, no cambian la ejecución ni la decisión resuelta.
 """
 
 from __future__ import annotations
@@ -40,10 +41,19 @@ from synthdb.generation.generators.text import (
 )
 from synthdb.ir.plans import ColumnPlan, PlanSource, TablePlan, TablePlans
 from synthdb.ir.schema import GeneratorSpec, SchemaSpec
+from synthdb.semantic.compatibility import (
+    TableIdentity,
+    identity_text,
+    table_identity,
+    validate_generator_compatibility,
+)
 
 RESOLVED_PLAN_VERSION: Literal["resolved-plan/1"] = "resolved-plan/1"
 PLAN_CANONICALIZATION_VERSION: Literal["plan-canonicalization/1"] = "plan-canonicalization/1"
 MERGE_POLICY_VERSION: Literal["merge-policy/1"] = "merge-policy/1"
+RULE_DSL_VERSION: Literal["rule-dsl/1"] = "rule-dsl/1"
+GENERATOR_CATALOG_VERSION: Literal["generator-catalog/1"] = "generator-catalog/1"
+SEED_DERIVATION_VERSION: Literal["seed-derivation/1"] = "seed-derivation/1"
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 Sha256Hex = Annotated[str, StringConstraints(pattern=_SHA256_PATTERN)]
@@ -188,6 +198,7 @@ def _params_dump(params: GeneratorParams | FkStrategy) -> dict[str, object]:
 class ResolvedColumnPlan(ArtifactModel):
     """Decisión validada para una columna existente."""
 
+    schema_name: str | None = Field(default=None, min_length=1, max_length=256)
     table_name: str = Field(min_length=1, max_length=256)
     column_name: str = Field(min_length=1, max_length=256)
     generator: ResolvedGenerator | None
@@ -226,6 +237,7 @@ class ResolvedColumnPlan(ArtifactModel):
 class ResolvedTablePlan(ArtifactModel):
     """Decisiones resueltas de una tabla, sin duplicar estructura de la IR."""
 
+    schema_name: str | None = Field(default=None, min_length=1, max_length=256)
     table_name: str = Field(min_length=1, max_length=256)
     columns: list[ResolvedColumnPlan] = Field(min_length=1)
 
@@ -233,7 +245,10 @@ class ResolvedTablePlan(ArtifactModel):
     def _validate_columns(self) -> ResolvedTablePlan:
         seen: set[str] = set()
         for column in self.columns:
-            if column.table_name != self.table_name:
+            if (column.schema_name, column.table_name) != (
+                self.schema_name,
+                self.table_name,
+            ):
                 raise ValueError(
                     f"la tabla propietaria de {column.column_name!r} es "
                     f"{column.table_name!r}, no {self.table_name!r}."
@@ -268,16 +283,46 @@ def _fingerprint(
     proposal_version: str,
     canonicalization_version: str,
     merge_policy_version: str,
+    rule_dsl_version: str,
+    generator_catalog_version: str,
+    seed_derivation_version: str,
     schema_hash: str,
     tables: list[ResolvedTablePlan],
+    audit: bool,
 ) -> PlanFingerprint:
-    """Calcula la huella del payload ejecutable; no recibe diagnósticos."""
+    """Calcula la huella ejecutable o auditable; nunca recibe diagnósticos."""
+    if audit:
+        table_payload = [table.model_dump(mode="json") for table in tables]
+    else:
+        table_payload = [
+            {
+                "columns": [
+                    {
+                        "column_name": column.column_name,
+                        "generator": (
+                            column.generator.model_dump(mode="json")
+                            if column.generator is not None
+                            else None
+                        ),
+                        "schema_name": column.schema_name,
+                        "table_name": column.table_name,
+                    }
+                    for column in table.columns
+                ],
+                "schema_name": table.schema_name,
+                "table_name": table.table_name,
+            }
+            for table in tables
+        ]
     payload = {
         "canonicalization_version": canonicalization_version,
+        "generator_catalog_version": generator_catalog_version,
         "merge_policy_version": merge_policy_version,
         "proposal_version": proposal_version,
+        "rule_dsl_version": rule_dsl_version,
         "schema_hash": schema_hash,
-        "tables": [table.model_dump(mode="json") for table in tables],
+        "seed_derivation_version": seed_derivation_version,
+        "tables": table_payload,
         "version": version,
     }
     digest = hashlib.sha256(_canonical_bytes(payload)).hexdigest()
@@ -291,9 +336,13 @@ class ResolvedPlanArtifact(ArtifactModel):
     proposal_version: Literal["semantic-proposal/1"] = "semantic-proposal/1"
     canonicalization_version: Literal["plan-canonicalization/1"] = PLAN_CANONICALIZATION_VERSION
     merge_policy_version: Literal["merge-policy/1"] = MERGE_POLICY_VERSION
+    rule_dsl_version: Literal["rule-dsl/1"] = RULE_DSL_VERSION
+    generator_catalog_version: Literal["generator-catalog/1"] = GENERATOR_CATALOG_VERSION
+    seed_derivation_version: Literal["seed-derivation/1"] = SEED_DERIVATION_VERSION
     schema_hash: Sha256Hex
     tables: list[ResolvedTablePlan] = Field(min_length=1)
     fingerprint: PlanFingerprint
+    audit_fingerprint: PlanFingerprint
     diagnostics: ArtifactDiagnostics
 
     @model_validator(mode="after")
@@ -303,19 +352,41 @@ class ResolvedPlanArtifact(ArtifactModel):
             proposal_version=self.proposal_version,
             canonicalization_version=self.canonicalization_version,
             merge_policy_version=self.merge_policy_version,
+            rule_dsl_version=self.rule_dsl_version,
+            generator_catalog_version=self.generator_catalog_version,
+            seed_derivation_version=self.seed_derivation_version,
             schema_hash=self.schema_hash,
             tables=self.tables,
+            audit=False,
         )
         if self.fingerprint != expected:
             raise ValueError(
                 "fingerprint inválido: el artefacto fue manipulado o se "
                 "canonicalizó con datos/versiones distintos."
             )
-        seen: set[str] = set()
+        expected_audit = _fingerprint(
+            version=self.version,
+            proposal_version=self.proposal_version,
+            canonicalization_version=self.canonicalization_version,
+            merge_policy_version=self.merge_policy_version,
+            rule_dsl_version=self.rule_dsl_version,
+            generator_catalog_version=self.generator_catalog_version,
+            seed_derivation_version=self.seed_derivation_version,
+            schema_hash=self.schema_hash,
+            tables=self.tables,
+            audit=True,
+        )
+        if self.audit_fingerprint != expected_audit:
+            raise ValueError(
+                "audit_fingerprint inválido: la trazabilidad del artefacto fue "
+                "manipulada o se canonicalizó con datos/versiones distintos."
+            )
+        seen: set[TableIdentity] = set()
         for table in self.tables:
-            if table.table_name in seen:
-                raise ValueError(f"tabla duplicada {table.table_name!r}.")
-            seen.add(table.table_name)
+            identity = (table.schema_name, table.table_name)
+            if identity in seen:
+                raise ValueError(f"tabla duplicada {identity_text(identity)!r}.")
+            seen.add(identity)
         return self
 
     @classmethod
@@ -331,6 +402,9 @@ class ResolvedPlanArtifact(ArtifactModel):
             "plan-canonicalization/1"
         ] = PLAN_CANONICALIZATION_VERSION,
         merge_policy_version: Literal["merge-policy/1"] = MERGE_POLICY_VERSION,
+        rule_dsl_version: Literal["rule-dsl/1"] = RULE_DSL_VERSION,
+        generator_catalog_version: Literal["generator-catalog/1"] = GENERATOR_CATALOG_VERSION,
+        seed_derivation_version: Literal["seed-derivation/1"] = SEED_DERIVATION_VERSION,
     ) -> ResolvedPlanArtifact:
         """Valida contra la IR y sella el payload con su fingerprint correcto."""
         if schema.hash is None:
@@ -341,17 +415,37 @@ class ResolvedPlanArtifact(ArtifactModel):
             proposal_version=proposal_version,
             canonicalization_version=canonicalization_version,
             merge_policy_version=merge_policy_version,
+            rule_dsl_version=rule_dsl_version,
+            generator_catalog_version=generator_catalog_version,
+            seed_derivation_version=seed_derivation_version,
             schema_hash=schema_hash,
             tables=tables,
+            audit=False,
+        )
+        audit_fingerprint = _fingerprint(
+            version=version,
+            proposal_version=proposal_version,
+            canonicalization_version=canonicalization_version,
+            merge_policy_version=merge_policy_version,
+            rule_dsl_version=rule_dsl_version,
+            generator_catalog_version=generator_catalog_version,
+            seed_derivation_version=seed_derivation_version,
+            schema_hash=schema_hash,
+            tables=tables,
+            audit=True,
         )
         artifact = cls(
             version=version,
             proposal_version=proposal_version,
             canonicalization_version=canonicalization_version,
             merge_policy_version=merge_policy_version,
+            rule_dsl_version=rule_dsl_version,
+            generator_catalog_version=generator_catalog_version,
+            seed_derivation_version=seed_derivation_version,
             schema_hash=schema_hash,
             tables=tables,
             fingerprint=fingerprint,
+            audit_fingerprint=audit_fingerprint,
             diagnostics=diagnostics,
         )
         return validate_artifact_against_schema(artifact, schema)
@@ -363,6 +457,13 @@ class ResolvedPlanArtifact(ArtifactModel):
     def to_table_plans(self, schema: SchemaSpec) -> TablePlans:
         """Valida la IR y convierte al contrato consumido por el motor vigente."""
         validate_artifact_against_schema(self, schema)
+        names = [table.table_name for table in self.tables]
+        if len(names) != len(set(names)):
+            raise ValueError(
+                "ResolvedPlanArtifact representa las tablas homónimas por namespace, "
+                "pero el TablePlans vigente solo conserva el nombre simple y no puede "
+                "recibirlas sin colisión."
+            )
         return TablePlans(tables=[table.to_table_plan() for table in self.tables])
 
 
@@ -378,20 +479,35 @@ def validate_artifact_against_schema(
             f"{artifact.schema_hash} != {schema.hash}."
         )
 
-    expected_tables = [table.name for table in schema.tables]
-    actual_tables = [table.table_name for table in artifact.tables]
+    expected_tables = [table_identity(table) for table in schema.tables]
+    actual_tables = [(table.schema_name, table.table_name) for table in artifact.tables]
     if actual_tables != expected_tables:
         raise ValueError(
             "las tablas del artefacto no coinciden exactamente con la IR y en "
             f"su orden: {actual_tables!r} != {expected_tables!r}."
         )
     for resolved, structural in zip(artifact.tables, schema.tables, strict=True):
+        table_ctx = identity_text(table_identity(structural))
         expected_columns = [column.name for column in structural.columns]
         actual_columns = [column.column_name for column in resolved.columns]
         if actual_columns != expected_columns:
             raise ValueError(
-                f"las columnas de {structural.name!r} no coinciden exactamente "
+                f"las columnas de {table_ctx!r} no coinciden exactamente "
                 f"con la IR y en su orden: {actual_columns!r} != "
                 f"{expected_columns!r}."
+            )
+        for resolved_column, structural_column in zip(
+            resolved.columns, structural.columns, strict=True
+        ):
+            generator = resolved_column.generator
+            validate_generator_compatibility(
+                schema=schema,
+                table=structural,
+                column=structural_column,
+                generator_type=generator.type if generator is not None else None,
+                params=(_params_dump(generator.params) if generator is not None else None),
+                null_ratio=generator.null_ratio if generator is not None else 0.0,
+                unique=generator.unique if generator is not None else False,
+                context=f"{table_ctx}.{structural_column.name}",
             )
     return artifact

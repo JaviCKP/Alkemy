@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from synthdb.ir.schema import (
+    CheckSpec,
     ColumnSpec,
     RelationshipSpec,
     SchemaSpec,
@@ -168,6 +169,14 @@ def test_valid_rule_and_relationship_hint_remain_auditable_proposals() -> None:
                 name="total",
                 type=TypeSpec(kind="numeric"),
                 nullable=False,
+                checks=[
+                    CheckSpec(
+                        sql_text="total >= 0",
+                        ast_supported=True,
+                        columns_involved=["total"],
+                        bounds_derived={"min": 0, "min_exclusive": False},
+                    )
+                ],
             ),
         ],
         foreign_keys=[relationship],
