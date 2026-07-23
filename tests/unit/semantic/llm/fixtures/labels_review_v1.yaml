@@ -1,0 +1,34 @@
+version: labels-review/1
+status: pending_human_second_review
+purpose: >-
+  Segundo repaso humano independiente de las labels heredadas del Hito 0.
+  Las labels actuales fueron redactadas por Claude y no son ground truth
+  humano definitivo.
+instructions:
+  - Revisar cada columna usando solo el DDL del fixture y su documentación.
+  - No consultar experiments/00_llm_plan/runs durante la revisión.
+  - Aceptar más de un generador cuando varias familias sean razonables.
+  - Registrar cada cambio propuesto y su justificación antes de alterar una label.
+  - Recalcular baseline_v1.json mediante el test después de una revisión aprobada.
+reviewer: null
+reviewed_at: null
+decision: pending
+population:
+  - fixture: inmobiliaria
+    source: experiments/00_llm_plan/labels/inmobiliaria.yaml
+    sha256: 9afc76ce02004d40dd2ede7594e1d5495b350c580c1df8765d13eda1b0faff04
+  - fixture: cementerio
+    source: experiments/00_llm_plan/labels/cementerio.yaml
+    sha256: 85bf22ac8eeceece7f6fceca981a24f13668e4ee8311184eac2da81a4b427bb0
+  - fixture: taller
+    source: experiments/00_llm_plan/labels/taller.yaml
+    sha256: d3948dfbcc9a696c422cc697eb186c4b9d9b5b3405da1455fd5db9128c70d7eb
+  - fixture: ecommerce
+    source: experiments/00_llm_plan/labels/ecommerce.yaml
+    sha256: a3ce80752aa1e7928571e52130ac21f7debf17ed80f0031019bced788dc128c3
+  - fixture: rrhh_autoref_nullable
+    source: experiments/00_llm_plan/labels/rrhh_autoref_nullable.yaml
+    sha256: 9ba56c24daf9c7bf1a8a0f07a178f3a1100e2435c7af0303c9a217835de98800
+  - fixture: rrhh_autoref_notnull
+    source: experiments/00_llm_plan/labels/rrhh_autoref_notnull.yaml
+    sha256: 0caacd1e13552bcba8fa1d4a91e9ebf82fc1792401b40116c7678db38287acd4
