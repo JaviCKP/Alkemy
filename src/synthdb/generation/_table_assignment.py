@@ -537,11 +537,11 @@ class TableAssigner:
                     return False
                 for offset in changed_offsets:
                     self.work.global_solver_work += 1
-                    _, _, minimum, maximum = layout[offset]
+                    bounds = layout[offset]
                     count = counts[offset]
                     if (
-                        count > maximum
-                        or count + suffix_resources[offset] + future_capacity[offset] < minimum
+                        count > bounds[3]
+                        or count + suffix_resources[offset] + future_capacity[offset] < bounds[2]
                     ):
                         return False
                 return True
@@ -571,21 +571,27 @@ class TableAssigner:
                 if next_values[option_index] is None:
                     capacity = option_caps[option_index]
                     high = remaining_rows
+
+                    # BOLT OPTIMIZATION: Inline bounds calculation to avoid multiple loops,
+                    # and min/max calls, improving performance in the hot path.
+                    low = remaining_rows - suffix_rows[option_index + 1]
+                    if low < 0:
+                        low = 0
+
                     for offset in increments[option_index]:
-                        high = min(high, layout[offset][3] - counts[offset])
-                    later_resources = {
-                        offset: suffix_resources[offset] - capacity
-                        for offset in increments[option_index]
-                    }
-                    low = max(0, remaining_rows - suffix_rows[option_index + 1])
-                    for offset in increments[option_index]:
-                        low = max(
-                            low,
+                        h_cand = layout[offset][3] - counts[offset]
+                        if h_cand < high:
+                            high = h_cand
+
+                        l_cand = (
                             layout[offset][2]
                             - counts[offset]
-                            - later_resources[offset]
-                            - future_capacity[offset],
+                            - (suffix_resources[offset] - capacity)
+                            - future_capacity[offset]
                         )
+                        if l_cand > low:
+                            low = l_cand
+
                     lower_bounds[option_index] = low
                     next_values[option_index] = high
 
