@@ -8,6 +8,19 @@ primera release (mientras la versión sea 0.x, la API se considera inestable).
 
 ### Added
 
+- H3-R1 (#51) — **contratos separados y artefacto versionado de plan**:
+  `SemanticProposal` modela la salida no confiable con
+  `semantic-proposal/1`, `extra="forbid"`, generadores discriminados y
+  parámetros tipados; reglas y hints FK quedan como propuestas auditables sin
+  autoridad ejecutiva. `ResolvedPlanArtifact` usa `resolved-plan/1`,
+  `plan-canonicalization/1` y `merge-policy/1`, exige coincidencia exacta con la
+  IR antes de convertirse al `TablePlans` vigente, serializa JSON canónico y
+  detecta manipulación mediante `PlanFingerprint` SHA-256. Fecha, tokens,
+  latencia y diagnóstico quedan fuera de la huella. Se añade una baseline
+  determinista común de 85 columnas (255 observaciones por modelo H0), el
+  manifiesto pendiente del segundo repaso humano de labels y ADR-009. No se
+  modifican la IR estructural, el fusor, el motor, proveedores ni `experiments/`.
+
 - H2 Sesión F (T2.14+T2.15+T2.16+T2.17, #41) — **emisores, CLI de generación y
   cierre del Hito 2**. Conecta el `Dataset` del motor con salidas reproducibles y
   con la CLI pública `plan`/`generate`/`export`:

@@ -1,0 +1,72 @@
+{
+  "labels": {
+    "review_manifest": "labels_review_v1.yaml",
+    "status": "pending_human_second_review"
+  },
+  "metrics": {
+    "h0": {
+      "llama3.1:8b": {
+        "generator": {
+          "hits": 179,
+          "total": 255
+        },
+        "role": {
+          "hits": 221,
+          "total": 255
+        }
+      },
+      "qwen2.5:3b-instruct": {
+        "generator": {
+          "hits": 227,
+          "total": 255
+        },
+        "role": {
+          "hits": 212,
+          "total": 255
+        }
+      },
+      "qwen2.5:7b-instruct": {
+        "generator": {
+          "hits": 225,
+          "total": 255
+        },
+        "role": {
+          "hits": 226,
+          "total": 255
+        }
+      }
+    },
+    "heuristic": {
+      "generator": {
+        "hits": 78,
+        "total": 85
+      },
+      "role": {
+        "hits": 78,
+        "total": 85
+      }
+    }
+  },
+  "population": {
+    "columns_by_fixture": {
+      "cementerio": 13,
+      "ecommerce": 21,
+      "inmobiliaria": 20,
+      "rrhh_autoref_notnull": 5,
+      "rrhh_autoref_nullable": 5,
+      "taller": 21
+    },
+    "fixtures": [
+      "inmobiliaria",
+      "cementerio",
+      "taller",
+      "ecommerce",
+      "rrhh_autoref_nullable",
+      "rrhh_autoref_notnull"
+    ],
+    "h0_repetitions_per_model": 3,
+    "observations_per_h0_model": 255,
+    "unique_columns": 85
+  },
+  "version": "h3-r1-baseline/1"
+}

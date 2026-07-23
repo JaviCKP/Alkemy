@@ -1,0 +1,400 @@
+[
+  {
+    "name": "minimal_valid",
+    "valid": true,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "clientes",
+          "entity": "cliente",
+          "confidence": 0.95,
+          "evidence": [
+            {
+              "kind": "table_name",
+              "table_name": "clientes"
+            }
+          ],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "clientes",
+              "column_name": "email",
+              "semantic_role": "email",
+              "generator": {
+                "type": "faker",
+                "params": {
+                  "provider": "email"
+                }
+              },
+              "confidence": 0.98,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "email"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            }
+          ],
+          "relationship_hints": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "extra_field",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [],
+      "sql": "DROP TABLE clientes"
+    }
+  },
+  {
+    "name": "unknown_generator",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "clientes",
+          "entity": "cliente",
+          "confidence": 0.9,
+          "evidence": [{"kind": "table_name", "table_name": "clientes"}],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "clientes",
+              "column_name": "email",
+              "semantic_role": "email",
+              "generator": {"type": "magic_rows", "params": {}},
+              "confidence": 0.9,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "email"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            }
+          ],
+          "relationship_hints": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "extra_generator_param",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "clientes",
+          "entity": "cliente",
+          "confidence": 0.9,
+          "evidence": [{"kind": "table_name", "table_name": "clientes"}],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "clientes",
+              "column_name": "email",
+              "semantic_role": "email",
+              "generator": {
+                "type": "faker",
+                "params": {
+                  "provider": "email",
+                  "shell": "calc.exe"
+                }
+              },
+              "confidence": 0.9,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "email"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            }
+          ],
+          "relationship_hints": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "wrong_owner",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "clientes",
+          "entity": "cliente",
+          "confidence": 0.9,
+          "evidence": [{"kind": "table_name", "table_name": "clientes"}],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "pedidos",
+              "column_name": "email",
+              "semantic_role": "email",
+              "generator": {
+                "type": "faker",
+                "params": {
+                  "provider": "email"
+                }
+              },
+              "confidence": 0.9,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "email"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            }
+          ],
+          "relationship_hints": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "duplicate_column",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "clientes",
+          "entity": "cliente",
+          "confidence": 0.9,
+          "evidence": [{"kind": "table_name", "table_name": "clientes"}],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "clientes",
+              "column_name": "email",
+              "semantic_role": "email",
+              "generator": {
+                "type": "faker",
+                "params": {
+                  "provider": "email"
+                }
+              },
+              "confidence": 0.9,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "email"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            },
+            {
+              "table_name": "clientes",
+              "column_name": "email",
+              "semantic_role": "correo",
+              "generator": {
+                "type": "faker",
+                "params": {
+                  "provider": "email"
+                }
+              },
+              "confidence": 0.8,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "email"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            }
+          ],
+          "relationship_hints": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "invalid_rule_shape",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "clientes",
+          "entity": "cliente",
+          "confidence": 0.9,
+          "evidence": [{"kind": "table_name", "table_name": "clientes"}],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "clientes",
+              "column_name": "fecha_fin",
+              "semantic_role": "fecha_fin",
+              "generator": {
+                "type": "datetime_range",
+                "params": {}
+              },
+              "confidence": 0.8,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "fecha_fin"
+                }
+              ],
+              "uncertainties": [],
+              "rules": [
+                {
+                  "rule_id": "fecha_ordenada",
+                  "table_name": "clientes",
+                  "target_column": "fecha_fin",
+                  "kind": "temporal",
+                  "rationale": "La fecha final no debe preceder a la inicial.",
+                  "confidence": 0.75,
+                  "evidence": [
+                    {
+                      "kind": "column_name",
+                      "table_name": "clientes",
+                      "column_name": "fecha_fin"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "relationship_hints": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "invalid_fk_identifier",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "pedidos",
+          "entity": "pedido",
+          "confidence": 0.9,
+          "evidence": [{"kind": "table_name", "table_name": "pedidos"}],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "pedidos",
+              "column_name": "cliente_id",
+              "semantic_role": "fk",
+              "generator": null,
+              "confidence": 1.0,
+              "evidence": [
+                {
+                  "kind": "constraint",
+                  "table_name": "pedidos",
+                  "column_name": "cliente_id"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            }
+          ],
+          "relationship_hints": [
+            {
+              "table_name": "pedidos",
+              "relationship_id": "clientes.id",
+              "strategy": {
+                "strategy": "zipf",
+                "s": 1.2
+              },
+              "confidence": 0.8,
+              "evidence": [
+                {
+                  "kind": "constraint",
+                  "table_name": "pedidos",
+                  "column_name": "cliente_id"
+                }
+              ],
+              "uncertainties": []
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "unknown_version",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/99",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": []
+    }
+  },
+  {
+    "name": "forbidden_execution_fields",
+    "valid": false,
+    "payload": {
+      "version": "semantic-proposal/1",
+      "schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tables": [
+        {
+          "table_name": "clientes",
+          "entity": "cliente",
+          "confidence": 0.9,
+          "evidence": [{"kind": "table_name", "table_name": "clientes"}],
+          "uncertainties": [],
+          "columns": [
+            {
+              "table_name": "clientes",
+              "column_name": "email",
+              "semantic_role": "email",
+              "generator": {
+                "type": "text_pool",
+                "params": {
+                  "values": ["a", "b"]
+                }
+              },
+              "null_ratio": 0.5,
+              "depends_on": ["id"],
+              "confidence": 0.9,
+              "evidence": [
+                {
+                  "kind": "column_name",
+                  "table_name": "clientes",
+                  "column_name": "email"
+                }
+              ],
+              "uncertainties": [],
+              "rules": []
+            }
+          ],
+          "relationship_hints": []
+        }
+      ]
+    }
+  }
+]
