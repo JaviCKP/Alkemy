@@ -19,5 +19,6 @@ No se añaden métricas: siguen siendo exactitud de rol y de generador. Las labe
 históricas se leen sin modificarlas y continúan marcadas como no definitivas.
 `labels_review_v1.yaml` deja preparado el segundo repaso humano independiente,
 con hashes de las seis fuentes y estado `pending_human_second_review`. El test
-recalcula cada SHA-256 desde su `source`, por lo que CI detecta si el manifiesto
-queda obsoleto.
+recalcula cada SHA-256 desde su `source` después de normalizar saltos de línea a
+LF, por lo que CI detecta si el manifiesto queda obsoleto sin depender del
+checkout Windows/Linux.

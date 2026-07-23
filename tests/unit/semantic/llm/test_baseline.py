@@ -41,4 +41,5 @@ def test_human_label_review_is_prepared_but_still_pending() -> None:
     assert len(review["population"]) == 6
     for item in review["population"]:
         source = _REPO_ROOT / item["source"]
-        assert hashlib.sha256(source.read_bytes()).hexdigest() == item["sha256"]
+        content = source.read_text("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        assert hashlib.sha256(content.encode("utf-8")).hexdigest() == item["sha256"]

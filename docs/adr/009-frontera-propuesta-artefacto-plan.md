@@ -144,7 +144,9 @@ métricas: se conservan exactitud de rol y de generador.
 fuentes por SHA-256 y deja instrucciones, revisor, fecha y decisión para el
 segundo repaso humano. Su estado es `pending_human_second_review`: las labels no
 se presentan como ground truth humano definitivo. El test recalcula los seis
-SHA-256 desde cada `source`; no se limita a validar la longitud del texto.
+SHA-256 desde cada `source`, con saltos de línea normalizados a LF para que el
+resultado sea independiente del checkout; no se limita a validar la longitud
+del texto.
 
 ## Consecuencias
 
